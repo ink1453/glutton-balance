@@ -1,0 +1,13 @@
+# 运行产物 / 本机配置（不提交）
+panel.exe
+panel.dev.exe
+*.exe
+config.json
+panel.log
+*.log
+*.bak
+
+# 本地调试出图（仓库里的 screenshots/ 是发布用截图，不忽略）
+demo*.png
+*.shot.png
+out.json
