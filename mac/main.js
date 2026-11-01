@@ -1,7 +1,7 @@
 'use strict';
 // 饭桶余额 · Mac 显示窗（Electron 主进程）
 // 结构：配置(只读热载) / 定位(petprobe 截图扫描) / 主题轮询 / 余额抓取 / 渲染状态下发 / 60fps 跟随 / 点击穿透 / 权限引导 / 出图与自测
-const { app, BrowserWindow, ipcMain, screen, systemPreferences, shell, Tray, Menu, nativeImage, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, systemPreferences, shell, Tray, Menu, nativeImage, globalShortcut, nativeTheme } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -79,6 +79,10 @@ let renderedWaiters = new Map();
 let shotMode = !!ARGS.shot;
 let shotOutDir = '';
 let trayQuitRequested = false;
+// #5：面板显示时序 / 跨屏跟踪
+let panelShown = false;        // 是否已首次显示（等定位就绪再显示，避免兜底目标闪跳）
+let panelShowDeadline = 0;     // 首次显示兜底截止 ms（无定位也要显示，避免窗口永不出现）
+let lastDisplayId = null;      // 上次所在显示器 id（跨屏时 snap + 重下发 dpr）
 
 function displayScaleOf(win) {
   try {
@@ -86,6 +90,40 @@ function displayScaleOf(win) {
     const d = screen.getDisplayMatching(b);
     return d && d.scaleFactor ? d.scaleFactor : 2;
   } catch (e) { return 2; }
+}
+
+// ---------------- 跟随动画（第 6 轮 A · #5 去漂移） ----------------
+// 临界阻尼跟随：x(t) = T + (e + c·t)·e^(-ωt)，c = v + ω·e（e = x - T，v = 速度 px/s）
+// 从静止出发永不越过目标 →「抵达即稳定、无回弹」；按真实 dt 积分 → 不受帧率抖动影响。
+const FOLLOW_OMEGA = 26;          // rad/s：100pt 位移约 0.27s 收敛到 0.6pt
+const FOLLOW_SNAP_PX = 0.6;       // 小于该距离且速度很低 → 直接贴到目标（消除亚像素抖）
+const FOLLOW_SNAP_V = 30;         // px/s
+function followAxisStep(pos, vel, target, dt) {
+  const e = pos - target;
+  if (Math.abs(e) <= FOLLOW_SNAP_PX && Math.abs(vel) <= FOLLOW_SNAP_V) return { pos: target, vel: 0, settled: true };
+  const w = FOLLOW_OMEGA;
+  const decay = Math.exp(-w * dt);
+  const c = vel + w * e;
+  const np = target + (e + c * dt) * decay;
+  const nv = (vel - w * c * dt) * decay;
+  // 严格禁止越过目标（旧弹簧 ζ≈0.81 会过冲 3~4px 再回弹 —— 「到位漂一下」的根因）
+  if ((e > 0 && np < target) || (e < 0 && np > target)) return { pos: target, vel: 0, settled: true };
+  return { pos: np, vel: nv, settled: false };
+}
+
+// 面板改尺寸：以「底边中点」为锚，一次 setBounds 同时改位置+尺寸。
+// 旧实现只 setSize（左上角锚定）→ 面板贴桌宠头顶时底边被顶偏 Δh，下一帧再被弹簧拉回 = 重排漂移。
+function resizePanelAnchored(w, h) {
+  if (!panelWin || panelWin.isDestroyed()) return;
+  let b;
+  try { b = panelWin.getBounds(); } catch (e) { return; }
+  if (!(b.width > 0) || !(b.height > 0)) return;
+  const nx = Math.round(b.x + (b.width - w) / 2);
+  const ny = Math.round(b.y + (b.height - h));
+  try { panelWin.setBounds({ x: nx, y: ny, width: w, height: h }, false); } catch (e) { return; }
+  const dx = nx - b.x, dy = ny - b.y;
+  if (anim.x != null) { anim.x += dx; anim.y += dy; if (anim.tx != null) { anim.tx += dx; anim.ty += dy; } }
+  lastPos = { x: nx, y: ny };
 }
 
 // ---------------- 老板拍板（2026-11-01 07:24）----------------
@@ -247,7 +285,7 @@ function applyAfterConfigChange() {
   }
   registerHotkey();
   if (!cfg.enabled && panelWin) panelWin.hide();
-  if (cfg.enabled && panelWin && !panelWin.isVisible()) panelWin.showInactive();
+  if (cfg.enabled && panelWin && panelShown && !panelWin.isVisible()) panelWin.showInactive();
   requestState(true);
 }
 
@@ -370,28 +408,46 @@ function httpJson(url, timeoutMs, headers) {
 }
 
 // ---------------- 主题 ----------------
-async function pollTheme() {
-  if (shotMode || loopStopped) return;
-  try {
-    const stateJ = await httpJson(`http://127.0.0.1:${cfg.theme.statePort}/api/state`, 1500);
-    if (stateJ && typeof stateJ.theme === 'string' && stateJ.theme) themeState.theme = stateJ.theme.toLowerCase();
-  } catch (e) { /* state 端口失败时保持上次主题 */ }
-  let themeJ = null;
-  try { themeJ = await httpJson(`http://127.0.0.1:${cfg.theme.port}/api/theme`, 2500); } catch (e) { themeJ = null; }
-  themeState.palettes = themeJ ? styleMod.parseThemePalettes(themeJ) : null;
-  let st;
-  if (!cfg.theme.follow && !cfg.theme.force) {
-    // Win 口径：follow=false 且无 force → 保持初始深色回退样式
-    st = styleMod.buildStyle({ theme: 'dark', force: '', palettes: null });
-  } else {
-    st = styleMod.buildStyle({ theme: themeState.theme, force: cfg.theme.force, palettes: themeState.palettes });
-  }
+// #7：系统深浅色的唯一可信来源是 Electron nativeTheme（跟 macOS 外观）。
+// 旧实现读 Coopanion /api/state 的 theme —— 那是桌宠自己的 UI 主题，不随系统外观变 → 面板一直停在深色。
+function systemIsDark() {
+  try { return !!(nativeTheme && nativeTheme.shouldUseDarkColors); } catch (e) { return true; }
+}
+
+// 主题优先级：老板手设 force > follow（跟系统）> 兜底深色；同步执行，nativeTheme updated 时零延迟生效。
+function applyTheme(reason) {
+  if (!cfg) return;
+  const sysDark = systemIsDark();
+  themeState.systemTheme = sysDark ? 'dark' : 'light';
+  let theme, src;
+  if (cfg.theme.force === 'dark' || cfg.theme.force === 'light') { theme = cfg.theme.force; src = 'config-force'; }
+  else if (!cfg.theme.follow) { theme = 'dark'; src = 'config-off'; }
+  else { theme = themeState.systemTheme; src = 'native'; }
+  const st = styleMod.buildStyle({ theme, force: '', palettes: themeState.palettes });
   const prevKey = themeState.style ? themeState.style.key : '';
+  themeState.theme = theme;
   themeState.style = st;
   if (st.key !== prevKey) {
-    logger.write(`theme apply src=${st.paletteSource} theme=${st.theme} selectedId=${st.selectedId} force=${cfg.theme.force} bowl=${cfg.display.bowlStyle}`);
+    logger.write(`theme apply src=${src} theme=${st.theme} nativeDark=${sysDark} nativeSource=${(nativeTheme && nativeTheme.themeSource) || ''} palette=${st.paletteSource} selectedId=${st.selectedId} force=${cfg.theme.force} reason=${reason} bowl=${cfg.display.bowlStyle}`);
     requestState(true);
   }
+}
+
+// 监听系统外观切换：Electron 发 nativeTheme 'updated' → 立即重算 style 并下发给渲染层（渲染器全部用色都取自 state.style）。
+function installThemeWatch() {
+  try {
+    nativeTheme.on('updated', () => applyTheme('nativeTheme-updated'));
+    logger.write(`theme watch installed themeSource=${(nativeTheme && nativeTheme.themeSource) || ''}`);
+  } catch (e) { logger.write('nativeTheme watch failed ' + String(e && e.message || e)); }
+}
+
+async function pollTheme() {
+  if (shotMode || loopStopped) return;
+  // 调色板仍从 Coopanion /api/theme 取（可选；失败就用内置 light/dark 回退色板，主题本身只认系统）
+  let themeJ = null;
+  try { themeJ = await httpJson(`http://127.0.0.1:${cfg.theme.port}/api/theme`, 1200); } catch (e) { themeJ = null; }
+  themeState.palettes = themeJ ? styleMod.parseThemePalettes(themeJ) : null;
+  applyTheme('poll');
 }
 
 async function pollPetState() {
@@ -411,7 +467,7 @@ async function pollPetState() {
 
 // ---------------- 状态构建 ----------------
 function amountText(v) {
-  if (v.rice) return '满盆金额';
+  if (v.rice) return '盆满钵满';
   if (!v.hasResult || !v.ok) return '连接失败';
   const sym = (v.currency === 'USD') ? '$' : '¥';
   const n = Number(v.amount);
@@ -421,13 +477,13 @@ function amountText(v) {
 function buildDetail(views, w, h) {
   const rows = views.map(v => {
     let sub;
-    if (v.rice) sub = '大白饭档 · 不联网 · 永远满盆';
+    if (v.rice) sub = '大白饭档 · 不联网 · 永远盆满钵满';
     else {
-      const th = (v.threshold == null) ? '阈值 无' : ('阈值 ¥' + Number(v.threshold).toFixed(2));
+      const th = (v.threshold == null) ? '不设低额提醒' : ('低于 ¥' + Number(v.threshold).toFixed(2) + ' 变红');
       let recent = '等待刷新';
       if (v.hasResult && v.ok) recent = '成功';
       else if (v.hasResult) recent = '失败';
-      sub = `${th} · 每 ${v.intervalSec}s 刷新 · 最近 ${recent}`;
+      sub = `${th} · 每 ${v.intervalSec} 秒刷新 · 上次 ${recent}`;
     }
     return { name: v.name, amountText: amountText(v), low: v.low, ok: v.ok, rice: v.rice, sub };
   });
@@ -527,8 +583,11 @@ function sendState(force, opts) {
   lastContentKey = key;
   stateCache = composed;
   if (composed.size.w !== panelSize.w || composed.size.h !== panelSize.h) {
+    const oldW = panelSize.w, oldH = panelSize.h;
     panelSize = { w: composed.size.w, h: composed.size.h };
-    try { panelWin.setSize(panelSize.w, panelSize.h, false); } catch (e) { /* ignore */ }
+    // #5：改尺寸以「底边中点」为锚（一次 setBounds），不再左上角定死→底边被顶偏→弹簧拉回
+    resizePanelAnchored(panelSize.w, panelSize.h);
+    logger.write(`panel resize ${oldW}x${oldH} -> ${panelSize.w}x${panelSize.h}（底边中点锚定）`);
   }
   try { panelWin.webContents.send('pbp:state', composed.state); } catch (e) { /* ignore */ }
   return composed;
@@ -632,8 +691,10 @@ function createPanelWindow() {
     try { panelWin.webContents.send('pbp:init', { assetDir: assets.assetDir, assets: assetPayload() }); } catch (e) { /* ignore */ }
     setTimeout(() => requestState(true), 60);
   });
-  panelWin.on('closed', () => { panelWin = null; });
-  if (cfg.enabled) panelWin.showInactive();
+  panelWin.on('closed', () => { panelWin = null; panelShown = false; });
+  // #5：先不显示 —— 等第一次定位（或兜底截止）后再 showInactive，避免「先出现在兜底位置再飞到桌宠头顶」
+  panelShown = false;
+  panelShowDeadline = Date.now() + 2500;
 }
 
 // ---------------- 跟随 / 动画 ----------------
@@ -658,16 +719,34 @@ function positionTick() {
       fallbackDisplayId: fallbackDisplayId,
       dpiScale: 1,
     });
-    if (anim.x == null) { anim.x = place.x; anim.y = place.y; anim.vx = 0; anim.vy = 0; }
-    // 弹簧：vel = (vel + (target-anim)*0.26)*0.50
-    anim.vx = (anim.vx + (place.x - anim.x) * 0.26) * 0.50;
-    anim.vy = (anim.vy + (place.y - anim.y) * 0.26) * 0.50;
-    anim.x += anim.vx;
-    anim.y += anim.vy;
-    if (Math.abs(place.x - anim.x) < 0.5 && Math.abs(anim.vx) < 0.08) { anim.x = place.x; anim.vx = 0; }
-    if (Math.abs(place.y - anim.y) < 0.5 && Math.abs(anim.vy) < 0.08) { anim.y = place.y; anim.vy = 0; }
-    const stationary = anim.vx === 0 && anim.vy === 0;
-    const floatOffset = stationary ? -Math.abs(Math.sin(Date.now() / 900)) * 0.9 : 0;
+    // —— 跟随时序（第 6 轮 A · #5 修复版）——
+    // ① 帧率无关：真实 dt 积分（旧版固定 16ms 系数，setTimeout 抖动会改变缓动曲线）
+    const tickNow = Date.now();
+    const dt = anim.t ? Math.min(0.064, Math.max(0.001, (tickNow - anim.t) / 1000)) : 0.016;
+    anim.t = tickNow;
+    if (anim.x == null) { anim.x = place.x; anim.y = place.y; anim.vx = 0; anim.vy = 0; anim.tx = place.x; anim.ty = place.y; }
+    // #5：窗口还没显示时不做动画，直接贴住当前目标 —— 保证「首次可见」就在最终位置（旧版会先出现在兜底位置再飞过去）
+    if (!panelShown) { anim.x = place.x; anim.y = place.y; anim.vx = 0; anim.vy = 0; anim.tx = place.x; anim.ty = place.y; }
+    // ② 跨屏：显示器变了 → 直接贴到新目标（不在两屏之间飞）+ 重下发（按新屏 dpr 重绘画布）
+    if (place.displayId !== lastDisplayId) {
+      if (lastDisplayId != null) {
+        logger.write(`display change ${lastDisplayId}->${place.displayId} snap&refresh`);
+        anim.x = place.x; anim.y = place.y; anim.vx = 0; anim.vy = 0; anim.tx = place.x; anim.ty = place.y;
+        requestState(true);
+      }
+      lastDisplayId = place.displayId;
+    }
+    // ③ 目标死区：停稳后目标变化 <1px（桌宠呼吸/采样中值抖动）不跟 → 消除「到位后一直微漂」
+    const followSettled = anim.vx === 0 && anim.vy === 0;
+    if (!followSettled || Math.abs(place.x - anim.tx) >= 1 || Math.abs(place.y - anim.ty) >= 1) {
+      anim.tx = place.x; anim.ty = place.y;
+    }
+    // ④ 临界阻尼跟随（无过冲）；⑤ 去掉旧版「静止时最多向上浮 0.9px」——那是老板看到的上下漂移之一
+    const stepX = followAxisStep(anim.x, anim.vx, anim.tx, dt);
+    const stepY = followAxisStep(anim.y, anim.vy, anim.ty, dt);
+    anim.x = stepX.pos; anim.vx = stepX.vel;
+    anim.y = stepY.pos; anim.vy = stepY.vel;
+    const stationary = stepX.settled && stepY.settled;
     // 轮子彩蛋：仅 feet + wheels 时随移动速度旋转（Win: WheelAngle += speed×8 度/帧）
     // 匹配比例：实测角色宽变化（换皮肤/缩放）时重排一次面板（老板 2026-11-01 07:24 拍板）
     {
@@ -687,7 +766,7 @@ function positionTick() {
     if (wheelsOn) {
       const moving = speed > 0.05;
       if (moving) {
-        wheelAngle = (wheelAngle + speed * 8) % 360;
+        wheelAngle = (wheelAngle + speed * dt * 8) % 360;
         const wnow = Date.now();
         if (wnow - lastWheelSend > 33) {
           lastWheelSend = wnow;
@@ -698,7 +777,7 @@ function positionTick() {
       }
     }
     const nx = Math.round(anim.x);
-    const ny = Math.round(anim.y + floatOffset);
+    const ny = Math.round(anim.y);
     if (nx !== lastPos.x || ny !== lastPos.y) {
       try { panelWin.setPosition(nx, ny, false); } catch (e) { /* ignore */ }
       lastPos = { x: nx, y: ny };
@@ -706,6 +785,18 @@ function positionTick() {
       if (!positionTick.lastLog || nowLog - positionTick.lastLog > 2000) {
         positionTick.lastLog = nowLog;
         logger.write(`place src=${place.src} petCenter=${place.centerX.toFixed(1)} targetX=${place.x} targetY=${place.y} w=${panelSize.w} h=${panelSize.h} wear=${cfg.display.wear} focusHead=${cfg.display.wear === 'head'} detect=${locator ? JSON.stringify(locator.status()) : '{}'}`);
+      }
+    }
+    // #5：定位就绪（或兜底截止）后才显示窗口，避免启动时在兜底位置闪一下再飞到桌宠头顶
+    if (!panelShown && cfg.enabled) {
+      // 就绪 = 目标已经来自真实定位（detect/detect），而不是兜底值；兜底截止只防权限异常时窗口不出现
+      const detectReady = String(place.src || '').split('/')[0] === 'detect' && String(place.src || '').split('/')[1] === 'detect';
+      // 尺寸基准也稳定后（charW 中值有 5 帧）再显示 → 首次可见就是最终尺寸/最终位置（旧版显示后还会重排一次）
+      const sizeReady = charWHist.length >= 5 && Number.isFinite(currentCharW());
+      if ((detectReady && sizeReady) || Date.now() >= panelShowDeadline) {
+        try { panelWin.showInactive(); } catch (e) { /* ignore */ }
+        panelShown = true;
+        logger.write(`panel shown detectReady=${detectReady} sizeReady=${sizeReady} src=${place.src} pos=${nx},${ny}`);
       }
     }
     if (Date.now() - started > 15) logger.write('place slow ms=' + (Date.now() - started));
@@ -766,7 +857,7 @@ function setupTray() {
 // ---------------- 启动 ----------------
 function startPanelIfReady() {
   if (!panelWin) createPanelWindow();
-  else if (cfg.enabled) panelWin.showInactive();
+  else if (cfg.enabled && panelShown) panelWin.showInactive();
 }
 
 function startLoops() {
@@ -786,6 +877,7 @@ function startLoops() {
     if (!loopStopped) setTimeout(themeLoop, Math.max(1000, cfg.theme.pollMs));
   };
   setTimeout(themeLoop, 200);
+  setTimeout(() => applyTheme('loops-start'), 250);
   setInterval(pollPetState, 500);
   setInterval(checkConfigReload, 5000);
   setInterval(checkAssetReload, 5000);
@@ -1017,7 +1109,7 @@ if (!gotLock) {
     if (argv && argv.includes('--quit')) {
       logger.write('quit requested by second instance');
       app.quit();
-    } else if (panelWin && !panelWin.isDestroyed()) {
+    } else if (panelWin && !panelWin.isDestroyed() && panelShown) {
       panelWin.showInactive();
     }
   });
@@ -1031,10 +1123,11 @@ if (!gotLock) {
     logger.write(`start ${APP_NAME} v${APP_VERSION} electron=${process.versions.electron} platform=${process.platform} ${process.arch}`);
     setupIpc();
     loadConfig();
+    installThemeWatch();
     if (ARGS.selftest) { runSelftest(ARGS.selftest); return; }
     scanAssets();
     assetSignature = assets.signature;
-    themeState.style = styleMod.buildStyle({ theme: 'dark', force: '', palettes: null });
+    applyTheme('boot'); // #7：启动即按系统深浅色出首帧（不再先深色后切）
 
     if (ARGS.shot) {
       try { await runShots(ARGS.shotDir); } catch (e) { logger.write('shot fatal ' + String(e && e.message || e)); app.quit(); }

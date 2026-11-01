@@ -147,7 +147,7 @@ function buildStyle(opts) {
   const tokens = pal ? fromPalette(pal, theme) : fallback(theme);
   const lightBodyBase = C(243, 240, 235);
   const darkBodyBase = C(30, 33, 38);
-  const baseMix = mix(tokens.plaqueFill, tokens.warn, light ? 0.12 : 0.18);
+  const baseMix = mix(tokens.plaqueFill, tokens.warn, light ? 0.20 : 0.18); // J：浅主题木牌加深一档（0.12→0.20）
   const solid = A(246, baseMix.r, baseMix.g, baseMix.b);
   const style = {
     light, theme,

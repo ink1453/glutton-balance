@@ -180,8 +180,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 | `position.monitorFollow` | 面板跟随桌宠所在显示器的工作区与 DPI（Per-Monitor V2），默认 true |
 
 - **布局与几何**：2 家盆 90×52、间距 8（组宽 188、组高 62）；**默认头顶（`display.wear=head`）**：盆组底=角色头顶+3×dpi、桌宠不抬升、贴边 clamp；切 `feet` 时盆底固定 `工作区底 − bottomGap(8) = 1384`、桌宠上移脚底踩盆沿（误差 ≤2px）。9 家 `pyramid` 金字塔三排完整可读（底 4/中 3/顶 2，排间纵向错位 = 桶高 + 米堆余量，不遮后排名牌），组更窄更高，`--selftest layoutProbe` 有逐槽几何。
-- **主题联动**：盆体材质（钢/搪瓷/陶瓷）不跟主题变；铭牌底色、描边、名称/金额/状态点/阴影颜色跟随 Coopanion dark/light 主题（浅色自动浅色），每 3s 或主题变化时刷新。
-- **动效**：60fps 弹簧缓动（到点轻微回弹）+ 静止 1px 内浮动；`display.wheels=true` 且 `wear=feet` 时盆底双轮随位移按速度旋转（轮子角度连续累计，不跳帧）、静止停转；`wear=head` 强制无轮（隐藏彩蛋口径）。
+- **主题联动**：盆体材质（钢/搪瓷/陶瓷）不跟主题变；铭牌底色、描边、名称/金额/状态点/阴影颜色跟随 Coopanion dark/light 主题（浅色自动浅色），每 3s 或主题变化时刷新。**Mac 0.0.3（开发中）：主题来源改为 macOS 系统深浅色（Electron `nativeTheme` + `updated` 事件），系统外观切换即时生效；`theme.force` 手设优先级保留。**
+- **动效**：60fps 弹簧缓动（到点轻微回弹）+ 静止 1px 内浮动；`display.wheels=true` 且 `wear=feet` 时盆底双轮随位移按速度旋转（轮子角度连续累计，不跳帧）、静止停转；`wear=head` 强制无轮（隐藏彩蛋口径）。**Mac 0.0.3（开发中）：改为临界阻尼跟随（无过冲、按真实 dt 积分）、取消静止浮动、改尺寸按底边中点锚定、定位与尺寸就绪后才显示；Win 端待同批修复。**
 - **无窗口工具**（给测试/出图，不建窗口、不打扰正在运行的面板）：
   - `panel.exe --selftest <out.json>`：输出 env（显示器/工作区/DPI 感知/`wear`+`wearRaw`/`nineLayout`+`nineLayoutRaw`）+ `ricebowl`/`capsule` 两种形态 × 2..9 家 × dpiScale 1.0/1.25/1.5 的几何（宽/高/step/组高/组顶/组底/居中/lift/compact/`pyramid`/`rowCounts`）+ **`layoutProbe{}`**（pyramid 6..9 家 × 四档缩放逐槽几何、row/twoRows 兼容、可读性对比）。
   - `panel.exe --demo N [--shot <png>] [--label L1|L2|L3] [--wear head|feet] [--layout pyramid|row|twoRows] [--theme dark|light] [--scale 0.5|1|1.5|2] [--state normal|low|offline|rice]`：N 家演示数据（前 2 家真实样例 + 其余用「大白饭」档凑数）；带 `--shot` 时按给定组合渲染 PNG 后退出，不开窗口、不写 config。

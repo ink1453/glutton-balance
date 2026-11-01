@@ -272,6 +272,10 @@
     if (changed || masterChanged) {
       moundCache = Object.create(null);
       moundCacheCount = 0;
+      frameCache = Object.create(null);
+      frameCacheCount = 0;
+      masterTipCache = Object.create(null);
+      masterTipCount = 0;
       startPreload();
     }
     return changed || masterChanged;
@@ -421,9 +425,17 @@
     else y = numOr(opts.top, 0) + fm.asc;
     ctx.save();
     ctx.font = fontSpec(px, weight);
-    ctx.fillStyle = opts.color || '#fff';
     ctx.textAlign = align;
     ctx.textBaseline = 'alphabetic';
+    // P0-I：可选 1px 反色描边（家名用「单遍实色 + halo」替代旧版三遍偏移刻痕，小尺寸更清楚）
+    if (opts.halo) {
+      ctx.strokeStyle = opts.halo;
+      ctx.lineWidth = numOr(opts.haloWidth, Math.max(1, px * 0.18));
+      ctx.lineJoin = 'round';
+      ctx.miterLimit = 2;
+      ctx.strokeText(String(text), opts.x, y);
+    }
+    ctx.fillStyle = opts.color || '#fff';
     ctx.fillText(String(text), opts.x, y);
     ctx.restore();
   }
@@ -584,17 +596,25 @@
     };
     if (!t.plaqueFillLightBody || !t.plaqueFillDarkBody) {
       // 主进程未给预混色时，按 Win WoodPlaqueFill 公式自行合成
-      var tt = light ? 0.12 : 0.18;
+      var tt = light ? 0.20 : 0.18; // J：与 src/style.js 同步（浅主题木牌加深）
       var baseMix = mix(t.paper, t.warn, tt);
       var solid = { r: baseMix.r, g: baseMix.g, b: baseMix.b, a: 246 };
       t.plaqueFillLightBody = compositeOver(solid, { r: 243, g: 240, b: 235, a: 255 });
       t.plaqueFillDarkBody = compositeOver(solid, { r: 30, g: 33, b: 38, a: 255 });
     }
-    t.tagBorder = mix(t.lineStrong, t.warn, light ? 0.45 : 0.30);
+    t.tagBorder = mix(t.lineStrong, t.warn, light ? 0.55 : 0.30); // J：浅主题描边加深
     t.tagShadow = t.plaqueShadow || (light ? { r: 84, g: 66, b: 44, a: 50 } : { r: 0, g: 0, b: 0, a: 95 });
     t.grain = (light ? t.woodGrainLight : t.woodGrainDark) || (light
       ? { r: 120, g: 96, b: 60, a: 24 }
       : { r: 255, g: 238, b: 205, a: 26 });
+    // —— 第 6 轮 A2 · #3 P0 渲染层小改：主题感知派生用色（全部由现有 token 推导；不动 assets / 布局几何）——
+    t.rimOutline = light ? { r: 169, g: 180, b: 198, a: 150 } : { r: 255, g: 255, b: 255, a: 70 };
+    t.rimOutlineStrong = light ? { r: 140, g: 152, b: 172, a: 205 } : { r: 255, g: 255, b: 255, a: 128 };
+    t.bowlGroundShadow = light ? { r: 46, g: 40, b: 32, a: 44 } : { r: 0, g: 0, b: 0, a: 26 };
+    t.backShade = light ? 0.86 : 1.0; // D：浅主题内壁整体压暗 14%（浅底看清内壁/轮廓）
+    t.backEdge = light ? { r: 0, g: 0, b: 0, a: 52 } : { r: 0, g: 0, b: 0, a: 72 };
+    t.seamShadow = light ? { r: 0, g: 0, b: 0, a: 46 } : { r: 0, g: 0, b: 0, a: 60 };
+    t.contactShadow = light ? { r: 0, g: 0, b: 0, a: 46 } : { r: 0, g: 0, b: 0, a: 58 };
     return t;
   }
 
@@ -633,7 +653,7 @@
   /** Win BowlRenderer.ValueText：大白饭/断线/币种符号 + 两位小数。 */
   function valueText(view) {
     if (!view) return '';
-    if (view.rice) return '满盆金额';
+    if (view.rice) return '盆满钵满';
     if (!view.hasResult || !view.ok) return '连接失败';
     var symbol = String(view.currency || 'CNY').toUpperCase() === 'USD' ? '$' : '¥';
     var amount = Number(view.amount);
@@ -649,24 +669,175 @@
     try { ctx.drawImage(img, x, y, w, h); return true; } catch (e) { return false; }
   }
 
-  /** 选米堆底图：master（rice-master.png）优先，缺图用 rice-{00..10} 整帧兜底。 */
-  function moundSource(level) {
-    if (riceMaster && riceMaster.img) return { img: riceMaster.img, w: riceMaster.w, h: riceMaster.h };
-    var f = riceFrames[level];
-    if (f && f.img) return { img: f.img, w: f.img.naturalWidth || 400, h: f.img.naturalHeight || 320 };
-    return null;
+  // -------------------------------------------------------------------------
+  // 第 6 轮 A2 · #3 P0 渲染层小改（不动 assets、不改布局几何口径）
+  //   C：主题感知 1px 描边 + 桶底淡落影（浅底白瓷/搪瓷轮廓不再隐形）
+  //   D：back 浅主题压暗 14% + 内沿 1px 描边 + 接缝柔和暗弧
+  //   K：深主题下深色桶身（黑陶/不锈钢）整幅提亮 8% + 弱亮边
+  // -------------------------------------------------------------------------
+  var silhouetteCache = Object.create(null);
+  var silhouetteCount = 0;
+  /** 取「整幅染色剪影」缓存（按 front 图 alpha 上色），用于 1px 描边。 */
+  function getSilhouette(img, w, h, dpr, colorCss) {
+    if (!img || !(w > 0) || !(h > 0)) return null;
+    var cw = Math.max(2, Math.round(w * dpr)), ch = Math.max(2, Math.round(h * dpr));
+    var key = String(img.src || '') + '|' + cw + 'x' + ch + '|' + colorCss;
+    var hit = silhouetteCache[key];
+    if (hit) return hit;
+    var c = document.createElement('canvas');
+    c.width = cw; c.height = ch;
+    var g = c.getContext('2d');
+    try {
+      g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+      g.drawImage(img, 0, 0, cw, ch);
+    } catch (e) { return null; }
+    g.globalCompositeOperation = 'source-in';
+    g.fillStyle = colorCss;
+    g.fillRect(0, 0, cw, ch);
+    if (silhouetteCount > 96) { silhouetteCache = Object.create(null); silhouetteCount = 0; }
+    silhouetteCache[key] = c; silhouetteCount++;
+    return c;
   }
 
-  /**
-   * Win RiceCache.GetMound：master 按目标宽等比缩放到 w×h（一次高质量缩放，缓存），
-   * 之后 DrawImageUnscaled 贴到 (riceX, surface)。
-   */
-  function getMoundCanvas(level, w, dpr, lightBody) {
-    var src = moundSource(level);
-    if (!src) return null;
+  /** P0-C：桶底淡落影（浅主题更实、深主题更淡），给桶身一个落地边界。 */
+  function drawBowlGroundShadow(ctx, slot, scale, t) {
+    var bw = numOr(slot.bowlW, 62), bh = numOr(slot.bowlH, 56);
+    var bottom = numOr(slot.bottom, numOr(slot.top, 0) + bh);
+    var cx = numOr(slot.x, 0) + bw / 2;
+    ctx.save();
+    try { ctx.filter = 'blur(' + (1.6 * scale).toFixed(2) + 'px)'; } catch (e) { /* ignore */ }
+    ctx.fillStyle = css(t.bowlGroundShadow);
+    ctx.beginPath();
+    ctx.ellipse(cx, bottom - 0.4 * scale, bw * 0.40, Math.max(1.2, 1.9 * scale), 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  /** P0-D：背面（内壁）——浅主题压暗 + 内沿描边 + 接缝暗弧；深主题保持原样。 */
+  function drawBowlBack(ctx, img, x, y, w, h, scale, t) {
+    if (!img) return;
+    ctx.save();
+    if (t.backShade < 0.999) { try { ctx.filter = 'brightness(' + t.backShade.toFixed(3) + ')'; } catch (e) { /* ignore */ } }
+    drawImageStretch(ctx, img, x, y, w, h);
+    ctx.restore();
+    // 内壁椭圆（资产口径：bbox x 20..301 / y 30..78，基于 320×290）
+    var ecx = x + w * 0.5016, ecy = y + h * 0.1862;
+    var erx = w * 0.4391, ery = h * 0.0828;
+    ctx.save();
+    ctx.strokeStyle = css(t.backEdge);
+    ctx.lineWidth = Math.max(1, 0.7 * scale);
+    ctx.beginPath(); ctx.ellipse(ecx, ecy, erx, ery, 0, 0, Math.PI * 2); ctx.stroke();
+    // 接缝：内壁下沿一条柔和暗弧（米/桶沿交界不再「平切贴上去」）
+    ctx.strokeStyle = css(t.seamShadow);
+    ctx.lineWidth = Math.max(1, 0.9 * scale);
+    ctx.beginPath(); ctx.ellipse(ecx, ecy + Math.max(0.5, 0.8 * scale), erx, ery, 0, 0.10 * Math.PI, 0.90 * Math.PI); ctx.stroke();
+    ctx.restore();
+  }
+
+  /** P0-C/K：正面（壳）——主题感知 1px 描边 + 深主题深色桶身提亮。 */
+  function drawBowlFront(ctx, img, x, y, w, h, scale, t, dpr, opts) {
+    if (!img) return;
+    var o = opts || {};
+    var outline = o.outlineColor || t.rimOutline;
+    if (o.darkBowl && !t.light) outline = t.rimOutlineStrong;
+    var sil = getSilhouette(img, w, h, dpr, css(outline));
+    if (sil) {
+      var sw = sil.width / dpr, sh = sil.height / dpr;
+      var off = Math.max(0.7, 0.85 * scale);
+      var dirs = [[-1, 0], [1, 0], [0, -1], [0, 1], [-0.7, -0.7], [0.7, -0.7], [-0.7, 0.7], [0.7, 0.7]];
+      for (var i = 0; i < dirs.length; i++) {
+        try { ctx.drawImage(sil, x + dirs[i][0] * off, y + dirs[i][1] * off, sw, sh); } catch (e) { /* ignore */ }
+      }
+    }
+    ctx.save();
+    if (o.brighten && o.brighten !== 1) { try { ctx.filter = 'brightness(' + o.brighten + ')'; } catch (e) { /* ignore */ } }
+    drawImageStretch(ctx, img, x, y, w, h);
+    ctx.restore();
+  }
+
+  // -------------------------------------------------------------------------
+  // 第 6 轮 A3 · #3 P1 米饭口径（改代码，不动资产）
+  //   旧口径：master（rice-master.png）整堆优先 → 满盆可见米高 20.25pt，米山整堆上移盖住桶口内壁
+  //   新口径：① 非满盆按档位取 rice-00..10 帧（400×320，等比缩到宽 riceW、高 riceW×0.8），
+  //             米尖位置 = rimBottom-2 - fill×米尖行程（线性/单调，满盆可见米高回到帧口径 ≈11.6pt）；
+  //           ② master 只在 fill≥0.995「满盆溢出」时取顶部 30% 作为溢出的堆尖叠加，其余档位不参与；
+  //           ③ 帧缺失（自定义/残缺素材）时才退回 master 整堆兜底，保证不空白。
+  // -------------------------------------------------------------------------
+  var RICE_TIP_TRAVEL = 0.236;     // 米尖行程 = 0.236×frontFace（满盆可见米高 ≈11.6pt，对齐旧 11 档帧口径；master 口径为 0.45）
+  var RICE_OVERFLOW_RATIO = 0.995; // fill≥0.995 视为满盆溢出（才用 master 堆尖）
+  var RICE_TIP_WIDTH_RATIO = 0.30; // 溢出堆尖宽 = 0.30×riceW（只做小堆尖，保证米尖随 fill 仍近似线性）
+  var RICE_MASTER_TIP_CROP = 0.15; // master 只取顶部 15% 作为满盆溢出的小堆尖
+
+  var frameCache = Object.create(null);
+  var frameCacheCount = 0;
+  var masterTipCache = Object.create(null);
+  var masterTipCount = 0;
+
+  /** 取第 level 档米饭帧的缩放画布（400×320 → 宽 w、高 w×0.8），并量出内容顶（用于「内容顶贴米尖」锚定）。 */
+  function getRiceFrame(level, w, dpr) {
+    var f = riceFrames[level];
+    if (!f || !f.img) return null;
     w = Math.max(8, Math.round(w));
-    var h = Math.max(4, Math.round(src.h * w / src.w));
-    var key = level + '|' + w + '|' + h + '|' + dpr + '|' + (lightBody ? 'L' : 'D');
+    var sw = f.img.naturalWidth || 400;
+    var sh = f.img.naturalHeight || 320;
+    var h = Math.max(4, Math.round(sh * w / sw));
+    var key = 'f' + level + '|' + w + '|' + h + '|' + dpr;
+    var hit = frameCache[key];
+    if (hit) return hit;
+    var c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * dpr));
+    c.height = Math.max(1, Math.round(h * dpr));
+    var g = c.getContext('2d', { willReadFrequently: true });
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    try { g.drawImage(f.img, 0, 0, c.width, c.height); } catch (e) { return null; }
+    // 内容顶 = 第一行 alpha>16 的位置（帧内容底贴画布底；用于把「内容顶」对到米尖）
+    var contentTopPx = 0;
+    try {
+      var data = g.getImageData(0, 0, c.width, c.height).data;
+      for (var y = 0; y < c.height; y++) {
+        var has = false;
+        for (var x = 0; x < c.width; x++) { if (data[(y * c.width + x) * 4 + 3] > 16) { has = true; break; } }
+        if (has) { contentTopPx = y; break; }
+      }
+    } catch (e) { contentTopPx = 0; }
+    var out = { canvas: c, w: w, h: h, contentTop: contentTopPx / dpr, contentH: h - contentTopPx / dpr };
+    if (frameCacheCount > 200) { frameCache = Object.create(null); frameCacheCount = 0; }
+    frameCache[key] = out; frameCacheCount++;
+    return out;
+  }
+
+  /** 满盆溢出堆尖：只取 master 顶部 ratio 部分、等比缩到宽 w（仅 fill≥0.995 用）。 */
+  function getMasterTip(ratio, w, dpr) {
+    if (!riceMaster || !riceMaster.img) return null;
+    w = Math.max(4, Math.round(w));
+    var sw = riceMaster.img.naturalWidth || riceMaster.w || 400;
+    var sh = riceMaster.img.naturalHeight || riceMaster.h || 263;
+    var cut = Math.max(2, Math.round(sh * ratio));
+    var h = Math.max(2, Math.round(cut * w / sw));
+    var key = 't' + ratio.toFixed(3) + '|' + w + '|' + dpr;
+    var hit = masterTipCache[key];
+    if (hit) return hit;
+    var c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * dpr));
+    c.height = Math.max(1, Math.round(h * dpr));
+    var g = c.getContext('2d');
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    try { g.drawImage(riceMaster.img, 0, 0, sw, cut, 0, 0, c.width, c.height); } catch (e) { return null; }
+    var out = { canvas: c, w: w, h: h };
+    if (masterTipCount > 64) { masterTipCache = Object.create(null); masterTipCount = 0; }
+    masterTipCache[key] = out; masterTipCount++;
+    return out;
+  }
+
+  /** 兜底（仅缺帧时）：master 按目标宽等比整堆（旧口径），避免自定义/残缺素材时米饭空白。 */
+  function getMoundCanvas(level, w, dpr) {
+    if (!riceMaster || !riceMaster.img) return null;
+    w = Math.max(8, Math.round(w));
+    var sw = riceMaster.w || 400, sh = riceMaster.h || 263;
+    var h = Math.max(4, Math.round(sh * w / sw));
+    var key = 'm|' + w + '|' + h + '|' + dpr;
     var hit = moundCache[key];
     if (hit) return hit;
     var c = document.createElement('canvas');
@@ -675,15 +846,14 @@
     var g = c.getContext('2d');
     g.imageSmoothingEnabled = true;
     g.imageSmoothingQuality = 'high';
-    try { g.drawImage(src.img, 0, 0, c.width, c.height); } catch (e) { return null; }
-    if (moundCacheCount > 400) { moundCache = Object.create(null); moundCacheCount = 0; }
-    moundCache[key] = c;
-    moundCacheCount++;
+    try { g.drawImage(riceMaster.img, 0, 0, c.width, c.height); } catch (e) { return null; }
+    if (moundCacheCount > 200) { moundCache = Object.create(null); moundCacheCount = 0; }
+    moundCache[key] = c; moundCacheCount++;
     return c;
   }
 
-  /** Win BowlRenderer.DrawSlot 的米饭段：位移式填充。 */
-  function drawRice(ctx, state, bowl, slot, view, dpr) {
+  /** 米饭段（第 6 轮 A3 · P1 帧口径）：11 档帧按 fill 取用 + 满盆溢出堆尖（master 仅在溢出用）+ P0-F 微调。 */
+  function drawRice(ctx, state, bowl, slot, view, dpr, scale) {
     if (!view) return;
     var rice = !!view.rice;
     var ratio = clamp(numOr(view.ratio, 0), 0, 1);
@@ -691,24 +861,81 @@
     var level = rice ? 10 : Math.round(ratio * 10);
     if (level <= 0) return;
     var fill = rice ? 1 : ratio;
+    var t = currentTokens || buildTokens(state.style);
     var plaque = slot.plaque || {};
     var rimBottom = numOr(slot.rimBottom, numOr(slot.rimY, slot.top + slot.bowlH * 0.42));
     var bottom = slot.bottom;
     var frontFace = isNum(plaque.frontFace) ? plaque.frontFace : maxNum(4, bottom - rimBottom);
     if (frontFace < 4) frontFace = 4;
-    var maxOverflow = 0.45 * frontFace;
-    var baseY = rimBottom - 2;
+    var maxOverflow = 0.45 * frontFace;          // 旧 master 口径的整堆行程（仅兜底时用）
+    var baseY = rimBottom - 2;                    // 空盆米面基准（与旧口径同一基准线）
     if (baseY > bottom) baseY = bottom;
-    var surface = baseY - fill * maxOverflow;
+    var surface = baseY - fill * maxOverflow;    // 兜底：旧 master 口径的整堆位置
     var riceW = numOr(slot.riceW, Math.round(slot.bowlW * 0.55));
-    var mound = getMoundCanvas(level, riceW, dpr, !!(bowl && bowl.lightBody));
+
+    var frame = getRiceFrame(level, riceW, dpr);
+    if (frame) {
+      // #3 P1：米尖位置 = 基准线 - fill×米尖行程（线性/单调；满盆可见米高回到 11 档帧口径 ≈11.6pt）
+      var tipY = baseY - fill * (RICE_TIP_TRAVEL * frontFace);
+      if (tipY > rimBottom) tipY = rimBottom;
+      var shrink = fill >= RICE_OVERFLOW_RATIO ? 0.962 : 1; // P0-F：满盆收窄 3.8% 露出桶口内壁
+      var drawW = frame.w * shrink;
+      var drawX = slot.riceX + (frame.w - drawW) / 2;
+      var drawY = tipY - frame.contentTop * shrink;         // 帧内容顶贴到米尖线；内容底被前层自然盖住
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      try { ctx.drawImage(frame.canvas, Math.round(drawX), Math.round(drawY), drawW, frame.h * shrink); } catch (e) { /* ignore */ }
+      // 满盆溢出：只有 fill≥0.995 才用 master 顶部 30% 画堆尖（其余档位 master 完全不参与）
+      if (fill >= RICE_OVERFLOW_RATIO) {
+        var tip = getMasterTip(RICE_MASTER_TIP_CROP, Math.round(riceW * RICE_TIP_WIDTH_RATIO), dpr);
+        if (tip) {
+          var tw = tip.w * shrink, th = tip.h * shrink;
+          var tcx = slot.riceX + riceW / 2;
+          try { ctx.drawImage(tip.canvas, Math.round(tcx - tw / 2), Math.round(tipY - th + 0.8 * scale), tw, th); } catch (e) { /* ignore */ }
+        }
+      }
+      // P0-F：米堆与桶沿的接触阴影 + 左右内壁暗边（带按桶沿线，随新米面收窄）
+      if (scale > 0) {
+        var cTop = Math.max(tipY + 0.5 * scale, rimBottom - 4.2 * scale);
+        if (rimBottom > cTop) {
+          var grd = ctx.createLinearGradient(0, cTop, 0, rimBottom + 0.4 * scale);
+          grd.addColorStop(0, 'rgba(0,0,0,0)');
+          grd.addColorStop(1, css(t.contactShadow));
+          ctx.fillStyle = grd;
+          ctx.fillRect(drawX - 0.5, cTop, drawW + 1, rimBottom + 0.4 * scale - cTop);
+        }
+        var edgeW = Math.max(1, 1.3 * scale);
+        var sideTop = Math.max(tipY + 0.5 * scale, rimBottom - 3.2 * scale);
+        if (rimBottom > sideTop) {
+          var gl = ctx.createLinearGradient(drawX, 0, drawX + edgeW, 0);
+          gl.addColorStop(0, css(t.contactShadow));
+          gl.addColorStop(1, 'rgba(0,0,0,0)');
+          ctx.fillStyle = gl;
+          ctx.fillRect(drawX, sideTop, edgeW, rimBottom - sideTop);
+          var gr = ctx.createLinearGradient(drawX + drawW - edgeW, 0, drawX + drawW, 0);
+          gr.addColorStop(0, 'rgba(0,0,0,0)');
+          gr.addColorStop(1, css(t.contactShadow));
+          ctx.fillStyle = gr;
+          ctx.fillRect(drawX + drawW - edgeW, sideTop, edgeW, rimBottom - sideTop);
+        }
+      }
+      ctx.restore();
+      return;
+    }
+
+    // 兜底：帧资产缺失（自定义/残缺素材）→ 退回旧 master 整堆，保证米饭不空白
+    var mound = getMoundCanvas(level, riceW, dpr);
     if (!mound) return;
+    var dw = mound.width / dpr;
+    var dh = mound.height / dpr;
+    var shrink2 = fill >= RICE_OVERFLOW_RATIO ? 0.962 : 1;
+    var drawW2 = dw * shrink2;
+    var drawX2 = slot.riceX + (dw - drawW2) / 2;
     ctx.save();
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    var dw = mound.width / dpr;
-    var dh = mound.height / dpr;
-    try { ctx.drawImage(mound, slot.riceX, Math.round(surface), dw, dh); } catch (e) { }
+    try { ctx.drawImage(mound, drawX2, Math.round(surface), drawW2, dh); } catch (e) { /* ignore */ }
     ctx.restore();
   }
 
@@ -744,6 +971,10 @@
     if (!dot) return;
     var dr = Math.max(1.5, dotD / 2);
     ctx.save();
+    // P0-H：1px 灯座暗圈（状态点有「灯座」，小尺寸下更清楚）
+    ctx.strokeStyle = 'rgba(0,0,0,0.42)';
+    ctx.lineWidth = Math.max(0.8, 0.9 * scale);
+    ctx.beginPath(); ctx.arc(dcx, dcy, dr + 0.9 * scale, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = 'rgba(0,0,0,0.2745)'; // 70/255
     ctx.beginPath(); ctx.arc(dcx, dcy + scale * 0.9, dr, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = css(dot);
@@ -781,20 +1012,24 @@
     fillRoundRect(ctx, tx + scale * 0.7, ty + scale * 1.6, tw, th, corner, css(t.tagShadow));
     var fill = lightBody ? t.plaqueFillLightBody : t.plaqueFillDarkBody;
     fillRoundRect(ctx, tx, ty, tw, th, corner, css(fill));
-    // 木纹：2 条横线（34% / 68% 高）
+    // P0-J：木纹只保留 1 条更粗的线（旧版 2 条在小尺寸下几乎不可见）
     ctx.save();
     ctx.strokeStyle = css(t.grain);
-    ctx.lineWidth = Math.max(1, 0.5 * scale);
+    ctx.lineWidth = Math.max(1, 0.8 * scale);
     var x0 = tx + 2.6 * scale;
     var x1 = tx + tw - 2.6 * scale;
-    var y1 = ty + th * 0.34;
-    var y2 = ty + th * 0.68;
+    var y1 = ty + th * 0.46;
     ctx.beginPath();
     ctx.moveTo(x0, y1); ctx.lineTo(x1, y1);
-    ctx.moveTo(x0 + tw * 0.06, y2); ctx.lineTo(x1 - tw * 0.04, y2);
     ctx.stroke();
     ctx.restore();
-    // 描边：Mix(lineStrong, warn, light?0.45:0.30)，线宽 max(1, 0.7*scale)
+    // P0-J：浅主题内缩 1px 深描边（内缩 1.1*scale，避开木牌底色取样点）
+    if (t.light) {
+      var inset = Math.max(1, 1.1 * scale);
+      strokeRoundRect(ctx, tx + inset, ty + inset, Math.max(1, tw - 2 * inset), Math.max(1, th - 2 * inset),
+        Math.max(1, corner - inset), 'rgba(0,0,0,0.16)', Math.max(0.8, 0.7 * scale));
+    }
+    // 描边：Mix(lineStrong, warn, light?0.55:0.30)，线宽 max(1, 0.7*scale)
     strokeRoundRect(ctx, tx, ty, tw, th, corner, css(t.tagBorder), Math.max(1, 0.7 * scale));
     return fill;
   }
@@ -858,26 +1093,13 @@
       if (ny + nh > ty - 0.5 * scale) ny = Math.max(slot.rimY + 0.5 * scale, ty - 0.5 * scale - nh);
       var maxNy = slot.bottom - 0.5 * scale - nh;
       if (ny > maxNy) ny = maxNy;
-      var engrave, dark, light;
-      if (lightBody) {
-        engrave = { r: 150, g: 140, b: 124, a: 232 };
-        dark = { r: 92, g: 84, b: 70, a: 150 };
-        light = { r: 255, g: 252, b: 244, a: 130 };
-      } else {
-        engrave = { r: 168, g: 174, b: 184, a: 235 };
-        dark = { r: 12, g: 14, b: 18, a: 160 };
-        light = { r: 235, g: 240, b: 246, a: 120 };
-      }
-      if (t.light) {
-        engrave = mix(engrave, t.amountColor, 0.10);
-        dark = mix(dark, t.amountColor, 0.06);
-      } else {
-        engrave = mix(engrave, t.plaqueBorder, 0.08);
-      }
+      // P0-I：单遍实色 + 1px 反色描边（替代旧版暗/亮/本色三遍 ±0.7pt 偏移刻痕，小尺寸更清楚）
+      var engrave = lightBody
+        ? mix({ r: 96, g: 84, b: 64, a: 255 }, t.ink, 0.10)
+        : mix({ r: 236, g: 240, b: 246, a: 255 }, t.amountColor, 0.10);
+      var nameHalo = lightBody ? 'rgba(255,252,244,0.85)' : 'rgba(10,12,16,0.85)';
       var nameCy = ny + nh / 2;
-      drawText(ctx, fit.text, { x: cx + off, cy: nameCy + off, align: 'center', px: fit.px, weight: 'normal', color: css(dark) });
-      drawText(ctx, fit.text, { x: cx - off, cy: nameCy - off, align: 'center', px: fit.px, weight: 'normal', color: css(light) });
-      drawText(ctx, fit.text, { x: cx, cy: nameCy, align: 'center', px: fit.px, weight: 'normal', color: css(engrave) });
+      drawText(ctx, fit.text, { x: cx, cy: nameCy, align: 'center', px: fit.px, weight: 'normal', color: css(engrave), halo: nameHalo, haloWidth: Math.max(1, 0.20 * fit.px) });
       recordText({
         style: 'L3', slot: slot.index, name: fit.text, namePx: +fit.px.toFixed(2),
         nameBasePx: namePx, nameMaxW: +nameMaxW.toFixed(2), nameShrunk: !!fit.shrunk,
@@ -885,9 +1107,9 @@
       });
     }
 
-    // 绿点钮：名称与木牌之间
-    var dotD = numOr(plaque.dotD, 4 * scale);
-    var dcy = numOr(plaque.dotCenterY, ty - dotD - 1.5 * scale);
+    // P0-H 绿点钮：名称与木牌之间；直径 4→5pt、中心下移 1pt（布局口径不动，只在渲染层放大）
+    var dotD = Math.max(numOr(plaque.dotD, 4 * scale), 5 * scale);
+    var dcy = numOr(plaque.dotCenterY, ty - dotD - 1.5 * scale) + 1.0 * scale;
     var lc = labelColors(view, lightBody, t);
     drawStatusDot(ctx, cx, dcy, dotD, lc.dot, scale);
   }
@@ -914,14 +1136,14 @@
       var nh = numOr(plaque.nameH, namePx * 1.10);
       var ny = numOr(plaque.nameY, rimY + 0.5 * scale);
       var nameCy = ny + nh / 2;
-      var nOff = Math.max(0.6, 0.7 * scale);
-      drawText(ctx, fit.text, { x: cx + nOff, cy: nameCy + nOff, align: 'center', px: fit.px, weight: 'normal', color: css(lc.shadowCol) });
-      drawText(ctx, fit.text, { x: cx, cy: nameCy, align: 'center', px: fit.px, weight: 'normal', color: css(lc.nameCol) });
+      // P0-I：单遍实色 + 1px 反色描边（L1 无底板，旧双偏移阴影在小尺寸下发虚）
+      var l1Halo = lightBody ? 'rgba(255,252,244,0.85)' : 'rgba(10,12,16,0.85)';
+      drawText(ctx, fit.text, { x: cx, cy: nameCy, align: 'center', px: fit.px, weight: 'normal', color: css(lc.nameCol), halo: l1Halo, haloWidth: Math.max(1, 0.20 * fit.px) });
     }
 
-    // 绿点：与 L3 同位置/同直径
-    var dotD = numOr(plaque.dotD, 4 * scale);
-    var dcy = numOr(plaque.dotCenterY, numOr(plaque.valueCenterY, bottom) - dotD);
+    // P0-H 绿点：与 L3 同口径（≥5pt、中心下移 1pt）
+    var dotD = Math.max(numOr(plaque.dotD, 4 * scale), 5 * scale);
+    var dcy = numOr(plaque.dotCenterY, numOr(plaque.valueCenterY, bottom) - dotD) + 1.0 * scale;
     drawStatusDot(ctx, cx, dcy, dotD, lc.dot, scale);
 
     // 数值：居中在 valueCenterY（= L3 木牌带中心），缩字保证完整显示
@@ -958,7 +1180,7 @@
     var baseNamePx = Math.max(8, 8 * scale);
     var baseValPx = Math.max(9, 9 * scale);
     var padX = 3.2 * scale;
-    var dotD = numOr(plaque.dotD, 4 * scale);
+    var dotD = Math.max(numOr(plaque.dotD, 4 * scale), 5 * scale); // P0-H：状态点 4→5pt
     if (dotD < 3.2) dotD = 3.2;
     var flagH = Math.max(17, (baseNamePx + baseValPx) + 4);
     var minW = Math.max(slot.bowlW * 0.62, baseValPx * 4.2);
@@ -1057,6 +1279,7 @@
     var wheelH = numOr(lay.wheelH, 0);
     var angleDeg = numOr(lay.wheelAngle, numOr(state.wheelAngle, 0));
     var grain = bowl ? bowl.lightBody : false;
+    var bgScale = layoutScale(lay); // P0：桶身/米饭渲染用的缩放基准（与数值层同口径）
 
     for (var i = 0; i < slots.length; i++) {
       var slot = slots[i];
@@ -1073,15 +1296,19 @@
         drawWheel(ctx, x + bw * 0.73, wy, wr, angleDeg);
       }
 
-      // 后层（内壁）
-      if (bowl && bowl.backImg) {
-        drawImageStretch(ctx, bowl.backImg, x, top, bw, bh);
-      }
-      // 米饭
-      drawRice(ctx, state, bowl, slot, view, dpr);
-      // 前层（壳 + 前沿）
+      // P0-C：桶底淡落影（浅主题更实、深主题更淡）
+      drawBowlGroundShadow(ctx, slot, bgScale, t);
+      // 后层（内壁）：P0-D 浅主题压暗 + 内沿描边 + 接缝暗弧
+      if (bowl && bowl.backImg) drawBowlBack(ctx, bowl.backImg, x, top, bw, bh, bgScale, t);
+      // 米饭：P0-F 接触阴影 / 满盆收窄露内壁 / 内壁暗边
+      drawRice(ctx, state, bowl, slot, view, dpr, bgScale);
+      // 前层（壳 + 前沿）：P0-C 主题感知 1px 描边；P0-K 深主题深色桶身提亮
       if (bowl && bowl.frontImg) {
-        drawImageStretch(ctx, bowl.frontImg, x, top, bw, bh);
+        var darkBowl = !bowl.lightBody;
+        drawBowlFront(ctx, bowl.frontImg, x, top, bw, bh, bgScale, t, dpr, {
+          darkBowl: darkBowl,
+          brighten: (!t.light && darkBowl) ? 1.08 : 1
+        });
       }
       // 数值
       if (view) drawLabel(ctx, t, lay, slot, view, bowl || { lightBody: grain });

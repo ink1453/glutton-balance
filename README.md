@@ -4,7 +4,10 @@
 
 ![9 家金字塔](screenshots/05-panel-pyramid-dark.png)
 
-> **当前版本：v0.0.2**（Windows 显示窗 / macOS 显示窗 / Coopanion 扩展三处版本号统一为 `0.0.2`）。
+> **当前版本：v0.0.3**（Coopanion 扩展 `pet-balance-world` 0.0.3；macOS 显示窗源码随本仓库 `mac/` 同步为 0.0.3；Windows 显示窗源码以本仓库 + Releases 历史资产为准）。
+
+> 🤖 **AI 一键安装（把这条链接交给你的 AI 助手）**：<https://raw.githubusercontent.com/ink1453/pet-balance-panel/main/AI-INSTALL.md>
+> 说明见 [`AI-INSTALL.md`](AI-INSTALL.md)（扩展 + Windows/macOS 两版显示窗的安装/验证/回滚步骤，不碰密钥）；备用下载入口：[Releases](https://github.com/ink1453/pet-balance-panel/releases/latest)。
 
 > **两套显示窗，各自安装**：本仓库同时包含 **Windows 版**（`Panel.cs` / `Panel.V3.cs`，C# / .NET Framework 4.8）与 **macOS 版**（[`mac/`](mac/README.md)，Electron 38 / macOS 14+ / Apple 芯片）显示窗源码。两版共用同一个 Coopanion 扩展（设置页）和同一份 `config.json` 配置格式，但构建与安装方式不同、互不依赖。
 
@@ -20,6 +23,7 @@ mac/                                    macOS 显示窗源码与构建/安装脚
 docs/PANEL-TECH.md                      Windows 版技术说明（配置字段、定位算法、渲染与调试）
 INSTALL.md                              Windows 版安装步骤
 mac/INSTALL.md                          macOS 版安装步骤
+AI-INSTALL.md                           给 AI 助手的一键安装说明（扩展 + 显示窗，含验证/回滚）
 bowls/  rice/                           显示窗内置饭桶与米饭素材
 screenshots/                            扩展设置页 / 显示窗截图
 ```
@@ -74,7 +78,7 @@ screenshots/                            扩展设置页 / 显示窗截图
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)（当前 **v0.0.2**：Windows / macOS 两版显示窗与 Coopanion 扩展同一版本号）。
+见 [CHANGELOG.md](CHANGELOG.md)（当前 **v0.0.3**：主题跟随、动画漂移、皮肤 P0/P1、文案与图标更新）。
 
 ## 许可
 

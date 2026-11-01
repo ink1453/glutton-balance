@@ -1,8 +1,8 @@
-# 饭桶余额 · macOS 显示窗（源码 · v0.0.2）
+# 饭桶余额 · macOS 显示窗（源码 · v0.0.3）
 
 macOS 版的「饭桶余额」显示窗：在 Coopanion 桌宠头顶摆一排小饭桶，桶里米饭多少 = 余额还剩多少。本目录是它的**源码 + 构建/安装脚本**，用 Electron 实现，和仓库根目录的 Windows 版（.NET）是两套独立程序，共用同一个 Coopanion 扩展（`pet-balance-world`）与同一份 `config.json` 配置格式。
 
-> 版本：macOS 显示窗 **0.0.2**（与 Windows 显示窗、Coopanion 扩展、GitHub Release 同号）。许可：MIT（与仓库一致）。
+> 版本：macOS 显示窗 **0.0.3**（与 Coopanion 扩展同号；Windows 显示窗源码随本仓库同步）。许可：MIT（与仓库一致）。
 
 ## 与 Windows 版的差异
 
