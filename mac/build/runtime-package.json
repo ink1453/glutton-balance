@@ -1,0 +1,10 @@
+{
+  "name": "pet-balance-panel-mac",
+  "productName": "饭桶余额",
+  "version": "0.1.0",
+  "description": "饭桶余额 · Mac 显示窗（Coopanion 桌宠旁余额饭桶；跨平台 Electron 实现）",
+  "main": "main.js",
+  "private": true,
+  "author": "麦麦 (Mac DSH)",
+  "license": "MIT"
+}

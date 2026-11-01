@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>打包链路自测</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  .card {
+    margin: 8px; padding: 10px 12px; border-radius: 12px;
+    background: rgba(18, 18, 20, 0.92);
+    border: 1px solid #55555b;
+    color: #eaeaec; font: 12px/1.5 "PingFang SC", "Hiragino Sans GB", sans-serif;
+  }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #76ca9f; }
+  .amt { font-weight: 700; font-size: 18px; }
+  .plaque {
+    margin-top: 8px; border-radius: 6px; padding: 4px 10px;
+    background: linear-gradient(#8c6740, #5c4128);
+    color: #f8e9cb; font-weight: 700; text-align: center;
+  }
+  #rinfo { color: #838389; font-size: 10px; margin-top: 6px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="row"><span class="dot"></span><span>DeepSeek</span><span class="amt" style="margin-left:auto">¥123.45</span></div>
+    <div class="plaque" id="plaque">¥ 123.45</div>
+    <div id="rinfo">wait…</div>
+  </div>
+<script>
+  // 自测用：确认 preload 桥 + canvas 可用，并把结果写进卡面（capturePage 能拍到）
+  const rinfo = document.getElementById('rinfo');
+  try {
+    const bridgeOk = !!(window.dummy && window.dummy.ping() === 'pong');
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#76ca9f';
+    ctx.fillRect(0, 0, 4, 4);
+    const px = ctx.getImageData(0, 0, 1, 1).data[0];
+    rinfo.textContent = 'preload=' + (bridgeOk ? 'OK' : 'FAIL') + ' · canvas=' + (px === 118 ? 'OK' : 'FAIL') + ' · dpr=' + devicePixelRatio;
+  } catch (e) {
+    rinfo.textContent = '自测脚本异常: ' + e.message;
+  }
+</script>
+</body>
+</html>

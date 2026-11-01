@@ -1,0 +1,14 @@
+{
+  "name": "pbp-dummy-selftest",
+  "productName": "饭桶余额-打包自测",
+  "version": "0.0.0-selftest",
+  "description": "打包链路自测用的最小 app（正式主程序由 Lead 写，不会用这个）",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^38.8.6"
+  }
+}

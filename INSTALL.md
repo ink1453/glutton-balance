@@ -1,5 +1,7 @@
 # INSTALL · 饭桶余额 Windows 显示窗（源码包 · v0.0.1）
 
+> **两版导航**：本文是 **Windows 版**显示窗的安装步骤；**macOS 版**的安装步骤见 [mac/INSTALL.md](mac/INSTALL.md)（源码在 [mac/](mac/) 目录）。两版各自独立安装，共用同一个 Coopanion 扩展与配置格式。
+
 本包是「饭桶余额」的 **Windows 显示窗程序源码包**，配合 Coopanion 的 `pet-balance-world` 扩展使用。
 
 > **本源码包不自带已编译的 `panel.exe`**：请按下面步骤在本机编译并安装。程序为源码自建、未签名，SmartScreen / 杀软可能提示，属正常现象（见 §5）。
@@ -74,7 +76,7 @@
 
 ## 7. 已知限制
 
-- **仅 Windows**（macOS / Linux 只有扩展设置页可用，显示窗程序不同）。
+- 本包为 **Windows 版**显示窗（macOS 版见 [mac/INSTALL.md](mac/INSTALL.md)；Linux 只有扩展设置页可用）。
 - 多显示器与 125% / 150% / 200% 系统缩放：建议按实际环境确认效果。
 - 本包为**源码包**，需要本机编译；未签名（见 §5）。
 - 最多支持 9 家余额来源。

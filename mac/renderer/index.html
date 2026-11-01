@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>饭桶余额显示窗</title>
+<style>
+  /* 逐像素透明：窗口本体透明，画布只画内容，alpha=0 处交给主进程做点击穿透 */
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
+    cursor: default;
+  }
+  canvas#pbp {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    outline: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="pbp"></canvas>
+<script src="./renderer.js"></script>
+</body>
+</html>

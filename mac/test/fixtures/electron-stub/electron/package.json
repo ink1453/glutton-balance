@@ -1,0 +1,6 @@
+{
+  "name": "electron",
+  "version": "38.8.6-stub",
+  "description": "仅本地自测用的 electron 假模块（不启动 GUI）：让 app/main.js 能在纯 node 下跑 --selftest 冒烟",
+  "main": "index.js"
+}

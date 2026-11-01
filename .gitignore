@@ -11,3 +11,7 @@ panel.log
 demo*.png
 *.shot.png
 out.json
+
+# macOS 显示窗构建产物（Electron 运行时与打包输出不进仓库）
+mac/build/dist/
+mac/tools/Electron.app/

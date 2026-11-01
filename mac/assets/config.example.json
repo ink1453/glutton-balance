@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "enabled": true,
+  "clickThrough": true,
+  "refreshSeq": 1,
+  "hotkey": {
+    "enabled": true,
+    "combo": "Ctrl+Alt+Shift+R"
+  },
+  "position": {
+    "mode": "under-feet",
+    "bottomGap": 8,
+    "offsetX": 0,
+    "offsetY": 0,
+    "zOrder": "topmost",
+    "petPort": 7797,
+    "clampMargin": 8,
+    "monitorFollow": true
+  },
+  "display": {
+    "style": "ricebowl",
+    "bowlStyle": "porcelain",
+    "labelStyle": "L3",
+    "wear": "head",
+    "nineLayout": "pyramid",
+    "compactAfter": 5,
+    "refYuan": 100,
+    "wheels": false,
+    "petScaleRef": 1.05,
+    "graphicsMin": 0.95,
+    "graphicsMax": 2.0,
+    "logo": false,
+    "logoStyle": "deepseek"
+  },
+  "theme": {
+    "follow": true,
+    "port": 17788,
+    "statePort": 7797,
+    "force": "",
+    "pollMs": 3000
+  },
+  "interaction": {
+    "expandOnClick": true
+  },
+  "capsule": {
+    "width": 200,
+    "height": 30,
+    "overlap": 6,
+    "maxProviders": 9
+  },
+  "liveFollow": {
+    "detectMs": 250,
+    "smooth": true
+  },
+  "petLift": {
+    "enabled": true
+  },
+  "providers": [
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "type": "official",
+      "preset": "deepseek",
+      "endpoint": "https://api.deepseek.com/user/balance",
+      "keySource": {
+        "kind": "dotenv",
+        "file": "%USERPROFILE%\\.dsh\\.env",
+        "var": "DEEPSEEK_OFFICIAL_API_KEY"
+      },
+      "threshold": 5,
+      "fullAmount": 100,
+      "intervalSec": 60,
+      "enabled": true
+    },
+    {
+      "id": "a6",
+      "name": "A6",
+      "type": "relay",
+      "preset": "newapi",
+      "endpoint": "https://a6api.vip/api/user/self",
+      "statusEndpoint": "https://a6api.vip/api/status",
+      "a6User": "",
+      "keySource": {
+        "kind": "file",
+        "file": "%USERPROFILE%\\.dsh\\secrets\\a6-console.txt",
+        "var": "A6_CONSOLE_TOKEN"
+      },
+      "threshold": 5,
+      "fullAmount": 100,
+      "intervalSec": 60,
+      "enabled": true
+    },
+    {
+      "id": "rice",
+      "name": "大白饭",
+      "type": "rice",
+      "preset": "rice",
+      "endpoint": "",
+      "keySource": {
+        "kind": "file",
+        "file": "",
+        "var": ""
+      },
+      "threshold": null,
+      "fullAmount": 100,
+      "intervalSec": 60,
+      "enabled": false
+    }
+  ]
+}

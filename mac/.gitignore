@@ -1,0 +1,9 @@
+# 构建产物与本地运行时（都不进仓）
+build/dist/
+tools/Electron.app/
+
+# 本机运行日志 / 系统垃圾 / 编辑器临时文件
+*.log
+.DS_Store
+._*
+*.swp

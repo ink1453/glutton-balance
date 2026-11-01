@@ -1,0 +1,14 @@
+{
+  "name": "白瓷饭桶",
+  "rice": {
+    "x": 44,
+    "y": 8,
+    "w": 232,
+    "h": 276
+  },
+  "rimY": 54,
+  "rimBottom": 80,
+  "anchor": "bottom-center",
+  "scaleHint": 1.0,
+  "back": "porcelain-back.png"
+}

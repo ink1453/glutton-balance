@@ -4,19 +4,35 @@
 
 ![9 家金字塔](screenshots/05-panel-pyramid-dark.png)
 
+> **两套显示窗，各自安装**：本仓库同时包含 **Windows 版**（`Panel.cs` / `Panel.V3.cs`，C# / .NET Framework 4.8）与 **macOS 版**（[`mac/`](mac/README.md)，Electron 38 / macOS 14+ / Apple 芯片）显示窗源码。两版共用同一个 Coopanion 扩展（设置页）和同一份 `config.json` 配置格式，但构建与安装方式不同、互不依赖。
+
 ## 关于这个项目
 
 这是一个「零代码」项目：老板没有任何编程经验，也没写过一行代码。从最初的想法、饭桶长什么样，到写代码、调试、打包、写文档，全部由 DeepSeek Harness（DSH）里的两个 AI 伙伴完成——Windows 侧的「墨墨」负责显示窗、Coopanion 扩展、测试与打包，macOS 侧的「麦麦」负责 Mac 端适配与发布。老板只提供了两样东西：灵感思路，和管够的「大白饭」（token）。
+
+## 仓库内容
+
+```
+Panel.cs / Panel.V3.cs / build.ps1 …   Windows 显示窗源码与构建/安装脚本（.NET Framework 4.8）
+mac/                                    macOS 显示窗源码与构建/安装脚本（Electron）
+docs/PANEL-TECH.md                      Windows 版技术说明（配置字段、定位算法、渲染与调试）
+INSTALL.md                              Windows 版安装步骤
+mac/INSTALL.md                          macOS 版安装步骤
+bowls/  rice/                           显示窗内置饭桶与米饭素材
+screenshots/                            扩展设置页 / 显示窗截图
+```
 
 ## 功能
 
 - **一眼看余额**：每家 AI 服务一只小饭桶，米饭量 = 余额 ÷ 你设的「满盆金额」。低额薄薄一层、中档到桶口、满盆冒出桶沿，还有小绿点 / 红点当提示灯。
 - **最多 9 家**：DeepSeek 官方余额接口、new-api 中转站（自动换算额度与汇率）、自定义接口 + JSON 取值路径；另有一档「大白饭」不联网、永远满盆，适合演示。
 - **外貌可换**：白瓷 / 黑陶 / 不锈钢 / 复古蓝白搪瓷四款圆柱饭桶，数值样式三款（桶沿小字 / 饭票小旗 / 桶沿木牌）；也能导入自己画的饭桶（设置页内置绘制模板）。
-- **跟着桌宠走**：头顶（默认）或脚下两态，随桌宠移动、缩放自动调整，不压任务栏，不抢焦点、不进 Alt+Tab；点击穿透默认开启。
+- **跟着桌宠走**：随桌宠移动、缩放自动调整，不压任务栏，不抢焦点、不进 Alt+Tab；点击穿透默认开启。
 - **9 家排法**：金字塔（默认）/ 一排 / 两排，家数多了自动收紧。
 - **手动保存**：改完点「保存」才写入（不自动写盘，防误改）；每家可单独设提示灯阈值与刷新间隔（10–3600 秒）。
 - **隐私**：只读余额查询接口，不调用模型、不扣额度、不上报任何数据；密钥由用户在本机自行填写，面板不显示、不修改、不上报。
+
+两版在摆放形态上有差异：**Windows 版**支持头顶 / 脚下两态（脚下可抬升桌宠、有轮子彩蛋）；**macOS 版**当前固定头顶形态、盆宽按桌宠实际宽度自动匹配（脚下形态在 macOS 上不适用）。
 
 ## 安装（Windows）
 
@@ -26,7 +42,24 @@
 
 > 显示窗为源码自建、**未签名**，若出现「Windows 已保护你的电脑」提示属正常，点「更多信息 → 仍要运行」即可。
 
-**前置**：Coopanion 0.2.16+（World API 6）；显示窗目前仅 Windows，配置页在其他平台也能打开。
+## 安装（macOS）
+
+> 详细分步说明、权限与卸载见 [mac/INSTALL.md](mac/INSTALL.md)。
+
+1. 前置：**macOS 14+ / Apple 芯片（arm64）**、Coopanion 0.2.16+，并已在 Coopanion 里安装启用「饭桶余额」扩展。
+2. 到本仓库 Releases 下载 macOS 显示窗源码包（`pet-balance-panel-mac-0.1.0-src.zip`），或直接使用本仓库 [`mac/`](mac/) 目录。
+3. 下载 Electron 38.8.6 arm64 运行时（官方 `Electron.app`），放到 `mac/tools/Electron.app`，或用 `--electron-src=<路径>` 指定（运行时不进仓库）。
+4. 构建并安装：
+
+   ```bash
+   cd mac
+   ./build/build-app.sh     # 产物：build/dist/饭桶余额.app
+   ./build/install.sh       # 装到 ~/Applications + 写登录自启
+   ```
+
+5. 打开「饭桶余额」设置页，填余额来源，保存后约 5 秒生效。
+
+> macOS 版同样**未签名（ad-hoc）**：首次从 Finder 打开需右键 →「打开」；换机器分发前建议自行签名 / 公证。显示窗需要「屏幕录制」权限识别桌宠位置；登录自启默认借助本机 DeepSeek Harness 当载体以继承该权限（没装 DSH 可用 `./build/install.sh --no-autostart` 手动启动，权限需自行授予）。macOS 扩展设置页可以打开和保存配置，但**「启停显示窗」目前仅 Windows 可用**，macOS 版用菜单栏图标管理。
 
 ## 截图
 
@@ -39,7 +72,7 @@
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)（当前 v0.0.1 首个公开版本）。
+见 [CHANGELOG.md](CHANGELOG.md)（当前 v0.0.1 首个公开版本：Windows 显示窗 v0.0.1 + macOS 显示窗 v0.1.0 + Coopanion 扩展 v0.01）。
 
 ## 许可
 
@@ -49,3 +82,4 @@
 
 - [DeepSeek Harness](https://github.com/deepseek-ai) —— 墨墨（Windows）与麦麦（macOS）
 - [Coopanion](https://github.com/Pal-AI-Lab/Coopanion) 桌宠
+- [Electron](https://www.electronjs.org/) —— macOS 显示窗运行时

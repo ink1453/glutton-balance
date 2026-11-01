@@ -1,0 +1,174 @@
+{
+  "version": 1,
+  "enabled": true,
+  "clickThrough": true,
+  "refreshSeq": 1,
+  "hotkey": {
+    "enabled": false,
+    "combo": "Ctrl+Alt+Shift+R"
+  },
+  "position": {
+    "mode": "under-feet",
+    "bottomGap": 8,
+    "offsetX": 0,
+    "offsetY": 0,
+    "zOrder": "topmost",
+    "petPort": 7797,
+    "clampMargin": 8,
+    "monitorFollow": true
+  },
+  "display": {
+    "style": "ricebowl",
+    "bowlStyle": "porcelain",
+    "labelStyle": "L3",
+    "wear": "head",
+    "nineLayout": "pyramid",
+    "compactAfter": 5,
+    "refYuan": 100,
+    "wheels": false,
+    "petScaleRef": 1.05,
+    "graphicsMin": 0.95,
+    "graphicsMax": 2,
+    "logo": false,
+    "logoStyle": "deepseek"
+  },
+  "theme": {
+    "follow": true,
+    "port": 17788,
+    "statePort": 7797,
+    "force": "light",
+    "pollMs": 3000
+  },
+  "interaction": {
+    "expandOnClick": false
+  },
+  "capsule": {
+    "width": 200,
+    "height": 30,
+    "overlap": 6,
+    "maxProviders": 9
+  },
+  "liveFollow": {
+    "detectMs": 250,
+    "smooth": true
+  },
+  "petLift": {
+    "enabled": false
+  },
+  "providers": [
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "type": "custom",
+      "preset": "custom",
+      "endpoint": "http://127.0.0.1:18080/custom/normal",
+      "jsonPath": "data.totalBalance",
+      "currency": "CNY",
+      "threshold": 5,
+      "fullAmount": 100,
+      "intervalSec": 60,
+      "enabled": true
+    },
+    {
+      "id": "a6",
+      "name": "A6",
+      "type": "relay",
+      "preset": "newapi",
+      "baseUrl": "http://127.0.0.1:18080",
+      "endpoint": "http://127.0.0.1:18080/api/user/self",
+      "statusEndpoint": "http://127.0.0.1:18080/api/status",
+      "a6User": "",
+      "threshold": 5,
+      "fullAmount": 30,
+      "intervalSec": 60,
+      "enabled": true
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi",
+      "type": "custom",
+      "preset": "custom",
+      "endpoint": "http://127.0.0.1:18080/custom/mid",
+      "jsonPath": "data.totalBalance",
+      "currency": "CNY",
+      "threshold": 5,
+      "fullAmount": 100,
+      "intervalSec": 60,
+      "enabled": true
+    },
+    {
+      "id": "low",
+      "name": "低额示例",
+      "type": "custom",
+      "preset": "custom",
+      "endpoint": "http://127.0.0.1:18080/custom/low",
+      "jsonPath": "data.totalBalance",
+      "currency": "CNY",
+      "threshold": 5,
+      "fullAmount": 20,
+      "intervalSec": 60,
+      "enabled": true
+    },
+    {
+      "id": "full",
+      "name": "满盆示例",
+      "type": "custom",
+      "preset": "custom",
+      "endpoint": "http://127.0.0.1:18080/custom/full",
+      "jsonPath": "data.totalBalance",
+      "currency": "CNY",
+      "threshold": 5,
+      "fullAmount": 100,
+      "intervalSec": 60,
+      "enabled": true
+    },
+    {
+      "id": "offline",
+      "name": "断线示例",
+      "type": "custom",
+      "preset": "custom",
+      "endpoint": "http://127.0.0.1:18080/fail",
+      "jsonPath": "data.totalBalance",
+      "currency": "CNY",
+      "threshold": 5,
+      "fullAmount": 100,
+      "intervalSec": 60,
+      "enabled": true
+    },
+    {
+      "id": "siliconflow",
+      "name": "硅基流动",
+      "type": "custom",
+      "preset": "custom",
+      "endpoint": "http://127.0.0.1:18080/custom/normal",
+      "jsonPath": "data.totalBalance",
+      "currency": "CNY",
+      "threshold": 5,
+      "fullAmount": 150,
+      "intervalSec": 60,
+      "enabled": true
+    },
+    {
+      "id": "rice1",
+      "name": "大白饭",
+      "type": "rice",
+      "preset": "rice",
+      "endpoint": "",
+      "threshold": null,
+      "fullAmount": 100,
+      "intervalSec": 60,
+      "enabled": true
+    },
+    {
+      "id": "rice2",
+      "name": "大白饭",
+      "type": "rice",
+      "preset": "rice",
+      "endpoint": "",
+      "threshold": null,
+      "fullAmount": 100,
+      "intervalSec": 60,
+      "enabled": true
+    }
+  ]
+}
