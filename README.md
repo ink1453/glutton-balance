@@ -21,7 +21,7 @@
 ## 安装（Windows）
 
 1. 在 Coopanion 扩展市场安装并启用「饭桶余额」（本条目为「需另装」类型）。
-2. 到本仓库 Releases 下载 Windows 显示窗源码包（`pet-balance-panel-x-0.0.1-源码包.zip`），按包内 `INSTALL.md` 用系统自带的 .NET Framework 4.8 编译，再运行 `install.ps1` 完成安装（装到用户主目录 `.dsh/pet-balance-panel`，写开机自启与开始菜单快捷方式，桌面零文件）。
+2. 到本仓库 Releases 下载 Windows 显示窗源码包（`pet-balance-panel-x-0.0.1-src.zip`），按包内 `INSTALL.md` 用系统自带的 .NET Framework 4.8 编译，再运行 `install.ps1` 完成安装（装到用户主目录 `.dsh/pet-balance-panel`，写开机自启与开始菜单快捷方式，桌面零文件）。
 3. 打开「饭桶余额」设置页，填余额来源，保存后约 5 秒生效。
 
 > 显示窗为源码自建、**未签名**，若出现「Windows 已保护你的电脑」提示属正常，点「更多信息 → 仍要运行」即可。
