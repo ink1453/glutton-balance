@@ -32,7 +32,7 @@ $lnk = $sh.CreateShortcut($lnkPath)
 $lnk.TargetPath = $wscript
 $lnk.Arguments = '//B //Nologo "{0}"' -f $vbs
 $lnk.WorkingDirectory = $here
-$lnk.Description = 'Pet Balance Panel'
+$lnk.Description = 'GluttonBalance'
 $lnk.Save()
 Write-Host "[2/3] 已创建开始菜单快捷方式：$lnkPath"
 

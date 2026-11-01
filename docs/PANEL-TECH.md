@@ -1,7 +1,7 @@
 > 本文件是 Windows 显示窗程序的技术参考：配置字段、定位算法、渲染与调试工具。
 > 安装与构建步骤见仓库根目录 [README.md](../README.md) 与 [INSTALL.md](../INSTALL.md)。
 
-# 饭桶余额（Pet Balance Panel）· 技术说明
+# 饭桶余额（GluttonBalance）· 技术说明
 
 > **v3（2026-10-31）：形态改为「白饭桶」** —— 桌宠脚下每家一只小盆，盆里白饭 = 余额 ÷ 满盆金额（每家一盆）。v2 的胶囊形态保留为可回退（`display.style: "capsule"`）。详见文末「v3 白饭桶」。
 

@@ -1,4 +1,4 @@
-# 饭桶余额 · Rice Bowl Balance
+# 饭桶余额 · GluttonBalance
 
 在 Coopanion 桌宠头顶（或脚下）按每家 AI 服务摆一只小饭桶：桶里米饭多少 = 余额还剩多少，一眼看出哪家快见底。
 
