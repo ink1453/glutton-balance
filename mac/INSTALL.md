@@ -1,4 +1,4 @@
-# INSTALL · 饭桶余额 macOS 显示窗（源码 · v0.1.0）
+# INSTALL · 饭桶余额 macOS 显示窗（源码 · v0.0.2）
 
 本目录是 **macOS 版**「饭桶余额」显示窗的源码包，配合 Coopanion 的 `pet-balance-world` 扩展使用。本文说明从源码到安装的完整步骤。
 

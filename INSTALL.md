@@ -1,4 +1,4 @@
-# INSTALL · 饭桶余额 Windows 显示窗（源码包 · v0.0.1）
+# INSTALL · 饭桶余额 Windows 显示窗（源码包 · v0.0.2）
 
 > **两版导航**：本文是 **Windows 版**显示窗的安装步骤；**macOS 版**的安装步骤见 [mac/INSTALL.md](mac/INSTALL.md)（源码在 [mac/](mac/) 目录）。两版各自独立安装，共用同一个 Coopanion 扩展与配置格式。
 
@@ -83,5 +83,5 @@
 
 ## 8. 版本
 
-- 版本：`0.0.1`
+- 版本：`0.0.2`（与 macOS 显示窗、Coopanion 扩展、GitHub Release 同号）
 - 详细更新日志见 Coopanion 扩展市场「饭桶余额」条目与扩展包内 `CHANGELOG.md`。
