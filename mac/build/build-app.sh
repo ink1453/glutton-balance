@@ -250,8 +250,9 @@ check_plist LSUIElement "true"
 check_plist NSHighResolutionCapable "true"
 ok "Info.plist 关键字段全部核对通过"
 
-# 清隔离属性（本地构建一般没有；有也不让 Gatekeeper 拦）
-xattr -dr com.apple.quarantine "$OUT" 2>/dev/null || true
+# 清扩展属性：隔离属性（quarantine）+ FinderInfo / 文件提供器（iCloud 同步）等杂项；
+# 否则 codesign 会报「resource fork, Finder information, or similar detritus not allowed」
+xattr -cr "$OUT" 2>/dev/null || true
 find "$OUT" -name '.DS_Store' -delete 2>/dev/null || true
 
 # ---------- 5. ad-hoc 签名 ----------
