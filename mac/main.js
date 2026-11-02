@@ -1,7 +1,7 @@
 'use strict';
 // 饭桶余额 · Mac 显示窗（Electron 主进程）
 // 结构：配置(只读热载) / 定位(petprobe 截图扫描) / 主题轮询 / 余额抓取 / 渲染状态下发 / 60fps 跟随 / 点击穿透 / 权限引导 / 出图与自测
-const { app, BrowserWindow, ipcMain, screen, systemPreferences, shell, Tray, Menu, nativeImage, globalShortcut, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, systemPreferences, shell, Tray, Menu, nativeImage, globalShortcut, nativeTheme, dialog } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -12,13 +12,14 @@ const configMod = require('./src/config');
 const layoutMod = require('./src/layout');
 const styleMod = require('./src/style');
 const { PetLocator } = require('./src/petinfo');
-const { ProviderManager, demoViews } = require('./src/providers');
+const { ProviderManager, demoViews, verifyKey, errorText: providerErrorText } = require('./src/providers');
 const { computePlacement } = require('./src/position');
+const { ShakeDetector } = require('./src/shake');
 const logger = require('./src/logger');
 
 const APP_ROOT = __dirname;
 const APP_NAME = '饭桶余额';
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.0.4';
 const ASSETS_DIR = path.join(APP_ROOT, 'assets');
 const RENDERER_HTML = process.env.PBP_RENDERER || path.join(APP_ROOT, 'renderer', 'index.html');
 const PRELOAD = path.join(APP_ROOT, 'preload.js');
@@ -27,11 +28,15 @@ const GUIDE_HTML = path.join(APP_ROOT, 'permission.html');
 
 // ---------------- 参数 ----------------
 function parseArgs(argv) {
-  const out = { shot: false, shotDir: '', selftest: '', demo: 0, config: '', quit: false, guide: false, capture: '', captureWait: 6, click: '', capture2: '', autostart: false };
+  const out = { shot: false, shotDir: '', selftest: '', demo: 0, config: '', quit: false, guide: false, capture: '', captureWait: 6, click: '', capture2: '', autostart: false, shakeSelftest: '', shakeScript: '', securitySelftest: '', connUiSelftest: '' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--shot') { out.shot = true; out.shotDir = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : ''; }
     else if (a === '--selftest') { out.selftest = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : path.join(APP_ROOT, 'selftest.json'); }
+    else if (a === '--shake-selftest') { out.shakeSelftest = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : path.join(APP_ROOT, 'shake-selftest.json'); }
+    else if (a === '--shake-script') { out.shakeScript = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : ''; }
+    else if (a === '--security-selftest') { out.securitySelftest = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : path.join(APP_ROOT, 'security-selftest.json'); }
+    else if (a === '--conn-ui-selftest') { out.connUiSelftest = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : path.join(APP_ROOT, 'conn-ui-selftest.json'); }
     else if (a === '--demo') { out.demo = parseInt(argv[++i] || '0', 10) || 0; }
     else if (a === '--config') { out.config = argv[++i] || ''; }
     else if (a === '--quit') { out.quit = true; }
@@ -83,6 +88,15 @@ let trayQuitRequested = false;
 let panelShown = false;        // 是否已首次显示（等定位就绪再显示，避免兜底目标闪跳）
 let panelShowDeadline = 0;     // 首次显示兜底截止 ms（无定位也要显示，避免窗口永不出现）
 let lastDisplayId = null;      // 上次所在显示器 id（跨屏时 snap + 重下发 dpr）
+// 第 11 轮丁路：桌宠生命周期跟随 —— 桌宠消失 ≥5s 隐藏显示窗，检测恢复后自动显示
+let appStartedAt = Date.now();       // 进程启动时间（启动宽限判据）
+let petMissingSince = 0;             // 桌宠连续缺失起点 ms（0=当前有桌宠）
+let noPetHidden = false;             // 是否因桌宠缺失而隐藏了显示窗
+const NO_PET_HIDE_MS = 5000;         // 桌宠消失多久后隐藏显示窗
+const NO_PET_STARTUP_GRACE_MS = 10000; // 启动宽限：启动后 10s 内不因桌宠缺失而隐藏
+// #1（0.0.4）：晃晕唤出余额面板 —— 抖动检测器 + 最近一次触发统计（日志/自测用）
+let shakeDetector = null;
+let lastShakeTrigger = null;   // {t,x,reversals,pathPt,...} 每次触发写一次，供日志/自测读取
 
 function displayScaleOf(win) {
   try {
@@ -144,6 +158,77 @@ function enforceMacDecisions(where) {
 const charWHist = [];
 let lockedCharW = NaN;
 let charWDrift = 0;
+// charW 去噪：菜单/气泡窗口会制造 3~4 倍尖刺；候选尺寸必须来自新采样，
+// 且在窄幅范围内稳定一段时间才可替换锁定基准。真实换肤/缩放仍会匹配，只是延迟生效。
+const CHARW_STABLE_MS = 2200;
+const CHARW_EXTREME_STABLE_MS = 3500;
+const CHARW_STABLE_SPREAD = 0.10;
+const CHARW_EXTREME_RATIO = 0.25;
+const CHARW_HARD_RATIO = 2.20;
+const CHARW_PENDING_MAX = 20;
+let charWLastLine = -1;
+let charWPending = [];
+let charWStableSince = 0;
+
+function medianCharW(values) {
+  if (!Array.isArray(values) || !values.length) return NaN;
+  const a = values.slice().sort((x, y) => x - y);
+  return a[Math.floor(a.length / 2)];
+}
+
+function observeCharWCandidate(candidate, now) {
+  if (!(Number.isFinite(candidate) && candidate > 20)) return;
+  if (!Number.isFinite(lockedCharW)) {
+    lockedCharW = candidate;
+    charWPending = [];
+    charWStableSince = now;
+    return;
+  }
+  const rel = Math.abs(candidate - lockedCharW) / lockedCharW;
+  // 3~4 倍尖刺直接丢弃，避免菜单/气泡把 graphicsScale 推到上限；换肤/缩放仍保留至 2.2 倍范围。
+  if (candidate > lockedCharW * CHARW_HARD_RATIO || candidate < lockedCharW / CHARW_HARD_RATIO) return;
+  if (!charWPending.length) {
+    charWPending = [candidate];
+    charWStableSince = now;
+  } else {
+    const pendingMed = medianCharW(charWPending);
+    if (!Number.isFinite(pendingMed) || Math.abs(candidate - pendingMed) / pendingMed > CHARW_STABLE_SPREAD) {
+      charWPending = [candidate];
+      charWStableSince = now;
+    } else {
+      charWPending.push(candidate);
+      if (charWPending.length > CHARW_PENDING_MAX) charWPending.shift();
+    }
+  }
+  const pMed = medianCharW(charWPending);
+  if (!Number.isFinite(pMed) || charWPending.length < 3) return;
+  const pMin = Math.min(...charWPending), pMax = Math.max(...charWPending);
+  const spread = (pMax - pMin) / pMed;
+  if (spread > CHARW_STABLE_SPREAD) {
+    charWPending = [candidate];
+    charWStableSince = now;
+    return;
+  }
+  const neededMs = rel > CHARW_EXTREME_RATIO ? CHARW_EXTREME_STABLE_MS : CHARW_STABLE_MS;
+  if (now - charWStableSince >= neededMs) {
+    if (Math.abs(pMed - lockedCharW) / lockedCharW > 0.08) {
+      lockedCharW = pMed;
+      charWDrift = 0;
+      logger.write(`scale charW baseline accepted charW=${lockedCharW.toFixed(1)} stableMs=${now - charWStableSince} spread=${spread.toFixed(3)}`);
+    }
+    charWPending = [];
+    charWStableSince = now;
+  }
+}
+
+// 明细卡：展开后给用户一个短暂操作窗口，默认 8 秒无操作自动收起。
+const DETAIL_AUTO_COLLAPSE_MS = 8000;
+let detailAutoCollapseTimer = null;
+
+function clearDetailAutoCollapse() {
+  if (detailAutoCollapseTimer) clearTimeout(detailAutoCollapseTimer);
+  detailAutoCollapseTimer = null;
+}
 
 // ---------------- 拖拽抖动抑制（第 3 轮 A4；对应 B1 §3 已知现象）----------------
 // 现象：Coopanion 拖拽时会把桌宠「提起」（B1 实测角色宽 87.5→140.5pt、角色高 108→152pt），
@@ -174,6 +259,12 @@ function petSampleTick(now) {
     const cx = Number(i.bodyCenterPt);
     const hy = Number(i.headPt);
     const cw = Number(i.charWpt);
+    if (Number.isFinite(cw) && cw > 20) {
+      charWLastLine = sampleLineSeen;
+      charWHist.push(cw);
+      if (charWHist.length > 7) charWHist.shift();
+      observeCharWCandidate(cw, now);
+    }
     // ① 位移检测：桌宠本体中心（x）/头顶（y）在相邻采样间移动 → 拖拽
     if (cx > 0 && hy > 0) {
       if (lastSamplePos && (Math.abs(cx - lastSamplePos.cx) > DRAG_MOVE_PT || Math.abs(hy - lastSamplePos.headY) > DRAG_MOVE_PT)) {
@@ -191,6 +282,9 @@ function petSampleTick(now) {
       }
     }
     lastSampleDeviated = deviated;
+    // ③ #1 晃晕唤出：同一条 petprobe 采样喂给抖动检测器（与面板跟随同源，天然抵消「面板自己动」）
+    //    typeof 守卫：test/scale-freeze-sim.js 会原样抽取本段代码单独回放，抽取环境里没有该函数定义。
+    if (typeof feedShakeSample === 'function') feedShakeSample(now);
   }
   // 冻结状态切换（每个位置循环都判一次：petprobe 短暂无新采样也能按时解冻；panel.log 有 begin/end 行）
   const frozen = now < scaleFrozenUntil;
@@ -209,28 +303,13 @@ function petSampleTick(now) {
 }
 
 function updateCharW() {
-  if (scaleFrozen) { charWDrift = 0; return; } // 拖拽瞬态：不采样、不累计重定基准帧数
-  try {
-    const cw = locator && locator.info ? locator.info.charWpt : NaN;
-    if (Number.isFinite(cw) && cw > 20) {
-      charWHist.push(cw);
-      if (charWHist.length > 7) charWHist.shift();
-    }
-  } catch (e) { /* ignore */ }
+  // 采样只在 petSampleTick 的新行分支写入，避免 60fps 重复计入菜单/气泡尖刺。
+  if (scaleFrozen) { charWDrift = 0; return; }
 }
 function currentCharW() {
   if (scaleFrozen && Number.isFinite(lockedCharW)) return lockedCharW; // 冻结期间保持原基准（盆宽不变）
-  if (!charWHist.length) return NaN;
-  const a = charWHist.slice().sort((x, y) => x - y);
-  const med = a[Math.floor(a.length / 2)];
-  if (!Number.isFinite(lockedCharW)) { lockedCharW = med; return lockedCharW; }
-  if (Math.abs(med - lockedCharW) / lockedCharW > 0.08) {
-    charWDrift++;
-    if (charWDrift >= 20) { lockedCharW = med; charWDrift = 0; }
-  } else {
-    charWDrift = 0;
-  }
-  return lockedCharW;
+  if (Number.isFinite(lockedCharW)) return lockedCharW;
+  return medianCharW(charWHist);
 }
 
 // ---------------- 配置 ----------------
@@ -241,6 +320,14 @@ function loadConfig() {
   if (r.ok) {
     rawCfg = r.raw;
     cfg = configMod.normalizeConfig(r.raw);
+    // 第 9 轮：搪瓷（enamel）已下线。旧配置写 bowlStyle=enamel/未知值 → normalize 回退白瓷，
+    // 这里补一条可追溯日志（不崩、不报错、不写回配置）；属于「优雅回退」的用户可见提示。
+    try {
+      const reqBowl = String((r.raw && r.raw.display && r.raw.display.bowlStyle) || '').trim();
+      if (reqBowl && !/^custom:/i.test(reqBowl) && cfg.display.bowlStyle === 'porcelain' && reqBowl.toLowerCase() !== 'porcelain') {
+        logger.write(`WARN bowlStyle=${reqBowl} 已下线/未知 → 回退 porcelain（白瓷）`);
+      }
+    } catch (e) { /* ignore */ }
     configMtime = r.mtimeMs;
     demoMode = false;
     logger.write(`config loaded path=${p} providers=${cfg.providers.length} mode=${cfg.position.mode} zOrder=${cfg.position.zOrder} clickThrough=${cfg.clickThrough} refreshSeq=${cfg.refreshSeq} wear=${cfg.display.wear} nineLayout=${cfg.display.nineLayout} bowl=${cfg.display.bowlStyle} label=${cfg.display.labelStyle} gsMin=${cfg.display.graphicsMin}`);
@@ -278,14 +365,20 @@ function applyAfterConfigChange() {
   enforceMacDecisions('reload');
   if (providerMgr) { providerMgr.configure(cfg); }
   if (petScale <= 0.2) petScale = 1.05;
+  clearDetailAutoCollapse();
   expanded = false;
+  // 层级随配置热载重算：明细卡/切换形态复用窗口时不回退到旧层级。
+  applyPanelWindowLevel('config-reload');
   // 点击穿透开关
   if (panelWin) {
-    try { panelWin.setIgnoreMouseEvents(!!cfg.clickThrough, { forward: true }); } catch (e) { /* ignore */ }
+    try { panelWin.setIgnoreMouseEvents(expanded ? false : !!cfg.clickThrough, { forward: true }); } catch (e) { /* ignore */ }
   }
   registerHotkey();
+  // #1：配置热载 → 重算抖动采样间隔 + 检测器配置（重新进入 3s 启动宽限）
+  applyShakeRuntime('config-reload');
   if (!cfg.enabled && panelWin) panelWin.hide();
-  if (cfg.enabled && panelWin && panelShown && !panelWin.isVisible()) panelWin.showInactive();
+  // 第 11 轮丁路：因桌宠缺失而隐藏的窗口，配置热载/重新启用时不得错误显示回来（等检测恢复再显示）
+  if (cfg.enabled && panelWin && panelShown && !noPetHidden && !panelWin.isVisible()) panelWin.showInactive();
   requestState(true);
 }
 
@@ -474,20 +567,60 @@ function amountText(v) {
   return sym + (Number.isFinite(n) ? n.toFixed(2) : '0.00');
 }
 
+// ---------------- #4（0.0.4 二阶段）失败分类文案 · 用户可见面接入 ----------------
+// 数据层在 src/providers.js（乙路第 7 轮）：views() 每条带 errorCode，errorText(code) 给中文可操作文案。
+// 这里只做展示：明细卡失败行副标题 =「上次 失败：<分类中文>」；未知码回退 UNKNOWN 通用文案。
+// 安全口径：不展示服务端响应体、不展示 HTTP 原文、不展示任何密钥；日志侧 providers.js 只记 code。
+const DETAIL_SUB_PX = 8.5;       // 与 renderer drawDetail 的 subPx 一致（dpiScale=1）
+function failureReasonText(v) {
+  const code = (v && v.errorCode) ? String(v.errorCode) : 'UNKNOWN';
+  let text = '';
+  try { text = providerErrorText(code); } catch (e) { text = ''; }
+  if (!text) { try { text = providerErrorText('UNKNOWN'); } catch (e) { text = '未知错误'; } }
+  return String(text);
+}
+/** 明细卡某一行副标题（失败行带分类原因；成功/等待不变）。 */
+function detailSubText(v) {
+  if (!v || v.rice) return '大白饭档 · 不联网 · 永远盆满钵满';
+  const th = (v.threshold == null) ? '不设低额提醒' : ('低于 ¥' + Number(v.threshold).toFixed(2) + ' 变红');
+  let recent = '等待刷新';
+  if (v.hasResult && v.ok) recent = '成功';
+  else if (v.hasResult) recent = '失败：' + failureReasonText(v);
+  return `${th} · 每 ${v.intervalSec} 秒刷新 · 上次 ${recent}`;
+}
+/** 估算一行文字宽度（pt）：CJK 按 1em，ASCII 按 0.55em（只用于给明细卡留够宽度，不追求精确）。 */
+function estimateTextWidth(text, px) {
+  let units = 0;
+  for (const ch of String(text)) units += (ch.charCodeAt(0) > 0xff) ? 1 : 0.55;
+  return units * px;
+}
+/** 明细卡需要的最小宽度：按最长副标题估算（失败原因可能很长），夹在 [minW, maxW]。 */
+function detailCardWidthNeeded(views, minW, maxW) {
+  let need = Number.isFinite(minW) ? minW : 240;
+  const lo = Number.isFinite(minW) ? minW : 240;
+  const hi = Number.isFinite(maxW) ? maxW : 460;
+  for (const v of (Array.isArray(views) ? views : [])) {
+    const w = 12 * 2 + 14 + estimateTextWidth(detailSubText(v), DETAIL_SUB_PX) + 6;
+    if (w > need) need = w;
+  }
+  return Math.round(Math.max(lo, Math.min(hi, need)));
+}
+
 function buildDetail(views, w, h) {
-  const rows = views.map(v => {
-    let sub;
-    if (v.rice) sub = '大白饭档 · 不联网 · 永远盆满钵满';
-    else {
-      const th = (v.threshold == null) ? '不设低额提醒' : ('低于 ¥' + Number(v.threshold).toFixed(2) + ' 变红');
-      let recent = '等待刷新';
-      if (v.hasResult && v.ok) recent = '成功';
-      else if (v.hasResult) recent = '失败';
-      sub = `${th} · 每 ${v.intervalSec} 秒刷新 · 上次 ${recent}`;
-    }
-    return { name: v.name, amountText: amountText(v), low: v.low, ok: v.ok, rice: v.rice, sub };
-  });
-  return { w, h, rows, title: '余额明细 · 点击面板收起', footer: '窗口置顶 · 点击面板收起' };
+  const rows = views.map(v => ({
+    name: v.name,
+    amountText: amountText(v),
+    low: v.low,
+    ok: v.ok,
+    rice: v.rice,
+    errorCode: v.errorCode || '',
+    sub: detailSubText(v),
+  }));
+  // #1 晃晕唤出后：默认配置是点击穿透 + 点击展开关闭 → 卡片点不到，「再晃一次」才是收起入口。
+  // 若用户关穿透并开了点击展开，点击也能收起，文案同时提示两种方式。
+  const clickable = !!(expanded || (cfg && !cfg.clickThrough && cfg.interaction.expandOnClick));
+  const hint = clickable ? '点击或再晃一次收起 · 8秒无操作自动收起' : '再晃一次收起 · 8秒无操作自动收起';
+  return { w, h, rows, title: '余额明细 · ' + hint, footer: '窗口置顶 · ' + hint };
 }
 
 function pickAssetFor(cfgV) {
@@ -535,13 +668,17 @@ function composeState(opts) {
   lay.wheelAngle = (o.wheelAngle != null) ? o.wheelAngle : wheelAngle;
   const style = o.style || themeState.style || styleMod.buildStyle({ theme: 'dark', force: '', palettes: null });
   const wantExpand = (o.expanded != null) ? o.expanded : expanded;
-  const canExpand = !cfgV.clickThrough && cfgV.interaction.expandOnClick && cfgV.display.style === 'ricebowl';
+  // #1：入口 = 点击展开（穿透关闭）或 晃晕唤出（抖动）任一；晃晕是独立入口，不影响点击穿透
+  const canExpand = canExpandDetailFor(cfgV);
   const mode = (wantExpand && canExpand) ? 'detail' : 'bowls';
   let size;
   let detail = null;
   if (mode === 'detail') {
     const s = 1;
-    const w = Math.round(Math.max(240 * s, Math.min(lay.groupW, 460 * s)));
+    let w = Math.round(Math.max(240 * s, Math.min(lay.groupW, 460 * s)));
+    // #4：失败行副标题带分类中文原因可能较长 → 按最长行撑宽（成功/等待场景宽度不变）
+    const needW = detailCardWidthNeeded(views, 240 * s, 460 * s);
+    if (needW > w) w = needW;
     const h = Math.round(34 * s + n * 30 * s + 24 * s);
     detail = buildDetail(views, w, h);
     size = { w, h };
@@ -598,14 +735,109 @@ function requestState(force, opts) {
   sendState(!!force, opts || {});
 }
 
+// ---------------- #1（0.0.4）晃晕唤出余额面板 · 主进程接线 ----------------
+// 定稿：materials/交互-晃晕唤出余额面板-20261101.md（方案 A：2s 内左右反转 ≥4 次唤出，再抖收起）
+// 纯识别逻辑在 src/shake.js（可单测）；这里只负责：采样输入、切换入口、配置热载、日志。
+// 与 #5 防漂移 / #7 主题跟随 / 隐藏窗逻辑无耦合：不改跟随公式、不改主题来源、不动 show/hide 判定。
+
+/** 当前配置下「余额明细卡」是否有入口：点击展开（穿透关闭时）或晃晕唤出，任一可用即可。 */
+function canExpandDetailFor(c) {
+  const cc = c || cfg;
+  if (!cc || !cc.display || !cc.interaction) return false;
+  if (cc.display.style !== 'ricebowl') return false; // capsule 回退形态不展开
+  const byClick = !cc.clickThrough && cc.interaction.expandOnClick;
+  const byShake = !!(cc.interaction.shake && cc.interaction.shake.enabled);
+  return !!(byClick || byShake);
+}
+
+/** 抖动检测器触发（在 feed 的同步回调里）：只切一次 detail，并写可追溯日志。 */
+function onShakeTrigger(stats) {
+  lastShakeTrigger = stats || null;
+  toggleDetail('shake', stats);
+}
+
+/**
+ * 展开 / 收起余额明细卡（点击、抖动、托盘共用同一状态，不会打结）。
+ * @param {string} source click | shake | tray
+ * @param {object} [stats] 抖动触发时的统计（写日志用）
+ */
+function toggleDetail(source, stats) {
+  if (!cfg) return false;
+  // C 方案：已展开时即使原配置 clickThrough=true，也允许点击卡片收起；展开入口仍需 shake/显式点击。
+  if (!expanded && !canExpandDetailFor(cfg)) {
+    logger.write(`interact ignore source=${source} reason=no-entry clickThrough=${cfg.clickThrough} expandOnClick=${cfg.interaction.expandOnClick} shake=${cfg.interaction.shake.enabled}`);
+    return false;
+  }
+  const nowT = stats && Number.isFinite(Number(stats.t)) ? Number(stats.t) : Date.now();
+  if (shakeDetector) shakeDetector.hold(nowT);
+  clearDetailAutoCollapse();
+  expanded = !expanded;
+  const extra = stats
+    ? ` reversals=${stats.reversals} pathPt=${stats.pathPt} spanMs=${stats.spanMs} windowMs=${stats.windowMs}`
+    : '';
+  logger.write(`interact ${expanded ? 'expand' : 'collapse'} source=${source}${extra}`);
+  if (panelWin && !panelWin.isDestroyed()) {
+    try { panelWin.setIgnoreMouseEvents(expanded ? false : !!cfg.clickThrough, { forward: true }); } catch (e) { /* ignore */ }
+  }
+  if (expanded) {
+    detailAutoCollapseTimer = setTimeout(() => {
+      detailAutoCollapseTimer = null;
+      if (expanded) toggleDetail('timeout');
+    }, DETAIL_AUTO_COLLAPSE_MS);
+  }
+  requestState(true);
+  return true;
+}
+
+/** 采样入口：只在「面板已显示 + 配置启用」时判手势，取角色本体 bbox 中心 x（拖拽时随桌宠移动）。 */
+function feedShakeSample(now) {
+  if (!cfg || !shakeDetector || shotMode || loopStopped) return;
+  const sc = cfg.interaction && cfg.interaction.shake;
+  if (!sc || !sc.enabled) return;
+  if (!cfg.enabled || !panelShown) return; // 隐藏窗 / 启动显示前不判（避免启动瞬态误触）
+  const i = (locator && locator.info) || {};
+  let x = Number(i.bodyCenterPt);
+  if (!(Number.isFinite(x) && x > 0)) x = Number(i.centerPt);
+  if (!(Number.isFinite(x) && x > 0)) return; // 本条采样没有角色横向坐标（如 no-pet-window 行）→ 跳过
+  shakeDetector.feed({ t: now, x });
+}
+
+function ensureShakeDetector() {
+  if (!cfg) return null;
+  if (!shakeDetector) {
+    shakeDetector = new ShakeDetector({ shake: cfg.interaction.shake, onTrigger: (stats) => onShakeTrigger(stats) });
+  } else {
+    shakeDetector.configure(cfg.interaction.shake);
+  }
+  return shakeDetector;
+}
+
+/**
+ * 应用抖动运行参数：采样间隔 + 检测器配置 + 启动宽限重置。
+ * 采样间隔：抖动判定专用 detectMs（默认 125ms，petprobe 下限 120），与 liveFollow.detectMs 取小者；
+ * 未启用抖动时保持 liveFollow.detectMs 原值（不改变旧行为）。
+ */
+function applyShakeRuntime(reason) {
+  if (!cfg) return;
+  const sc = cfg.interaction.shake;
+  const baseMs = Math.max(120, cfg.liveFollow.detectMs || 250);
+  const wantMs = sc.enabled ? Math.max(120, sc.detectMs || 125) : baseMs;
+  const intervalMs = Math.min(baseMs, wantMs);
+  if (locator && typeof locator.setIntervalMs === 'function') {
+    const changed = locator.setIntervalMs(intervalMs);
+    if (changed) logger.write(`petprobe interval ${locator.intervalMs}ms（shake detectMs=${sc.detectMs} liveFollow.detectMs=${baseMs}）`);
+  }
+  ensureShakeDetector();
+  shakeDetector.reset(Date.now(), reason);
+  logger.write(`shake reset reason=${reason} enabled=${sc.enabled} windowMs=${sc.windowMs} reverse=${sc.reverseCount} amp=${sc.minAmplitudePt} path=${sc.minPathPt} quiet=${sc.quietGapMs} grace=${sc.startupGraceMs} detect=${intervalMs}ms`);
+}
+
 // ---------------- 点击穿透 / 交互 ----------------
 function onPanelClick() {
-  if (!cfg || cfg.clickThrough) return;
-  if (!cfg.interaction.expandOnClick) return;
-  if (cfg.display.style === 'capsule') return;
-  expanded = !expanded;
-  logger.write('interact ' + (expanded ? 'expand' : 'collapse') + ' source=click');
-  requestState(true);
+  if (!cfg) return;
+  if (expanded) { toggleDetail('click'); return; }
+  if (cfg.clickThrough || !cfg.interaction.expandOnClick) return;
+  toggleDetail('click');
 }
 
 function setupIpc() {
@@ -665,6 +897,31 @@ function showGuideWindow(reason) {
 }
 
 // ---------------- 面板窗口 ----------------
+/**
+ * 设置面板原生窗口层级。
+ *
+ * Coopanion 的聊天气泡与桌宠同属 floating 层。头顶饭桶必须落在气泡下方，不能
+ * 使用 screen-saver（它会压住气泡）；floating/-1 是 macOS/Electron 能提供的
+ * 最小相对层级。脚下形态仍尊重 position.zOrder，便于复核两种形态的原有语义。
+ * 这个函数在建窗和热载时都调用，明细卡 resize / 复用同一窗口时不会回退层级。
+ */
+function applyPanelWindowLevel(reason) {
+  if (!panelWin || panelWin.isDestroyed() || !cfg) return false;
+  const head = layoutMod.isHead(cfg);
+  const belowBubble = head;
+  const requestedBelowPet = cfg.position && cfg.position.zOrder === 'below-pet';
+  const level = (belowBubble || requestedBelowPet) ? 'floating' : 'screen-saver';
+  const relativeLevel = (belowBubble || requestedBelowPet) ? -1 : 0;
+  try {
+    panelWin.setAlwaysOnTop(true, level, relativeLevel);
+    logger.write(`panel layer level=${level} relative=${relativeLevel} wear=${cfg.display.wear} belowBubble=${belowBubble ? 1 : 0} zOrder=${cfg.position.zOrder} reason=${reason}`);
+    return true;
+  } catch (e) {
+    logger.write(`panel layer failed level=${level} wear=${cfg.display.wear} reason=${reason} err=${String(e && e.message || e)}`);
+    return false;
+  }
+}
+
 function createPanelWindow() {
   const head = layoutMod.isHead(cfg);
   const gs = layoutMod.graphicsScale(cfg, petScale, currentCharW());
@@ -677,12 +934,8 @@ function createPanelWindow() {
     backgroundColor: '#00000000',
     webPreferences: { preload: PRELOAD, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   });
-  if (cfg.position.zOrder === 'below-pet') {
-    // Mac 无 Win 的「插在桌宠之后」层级；用 floating 相对层级 -1 近似（角色尽量不遮挡），并在报告注明偏差
-    panelWin.setAlwaysOnTop(true, 'floating', -1);
-  } else {
-    panelWin.setAlwaysOnTop(true, 'screen-saver');
-  }
+  // 头顶模式必须在 Coopanion 聊天气泡下层；脚下模式继续尊重 zOrder 配置。
+  applyPanelWindowLevel('create');
   try { panelWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (e) { /* ignore */ }
   try { panelWin.setIgnoreMouseEvents(!!cfg.clickThrough, { forward: true }); } catch (e) { /* ignore */ }
   panelWin.loadFile(RENDERER_HTML);
@@ -691,7 +944,7 @@ function createPanelWindow() {
     try { panelWin.webContents.send('pbp:init', { assetDir: assets.assetDir, assets: assetPayload() }); } catch (e) { /* ignore */ }
     setTimeout(() => requestState(true), 60);
   });
-  panelWin.on('closed', () => { panelWin = null; panelShown = false; });
+  panelWin.on('closed', () => { panelWin = null; panelShown = false; petMissingSince = 0; noPetHidden = false; });
   // #5：先不显示 —— 等第一次定位（或兜底截止）后再 showInactive，避免「先出现在兜底位置再飞到桌宠头顶」
   panelShown = false;
   panelShowDeadline = Date.now() + 2500;
@@ -707,6 +960,36 @@ function positionTick() {
     if (!panelWin || panelWin.isDestroyed() || !cfg) { schedulePosition(); return; }
     if (!cfg.enabled) { schedulePosition(); return; }
     const head = layoutMod.isHead(cfg);
+    // —— 第 11 轮丁路：桌宠生命周期跟随（桌宠退出 → 隐藏显示窗；桌宠回来 → 自动显示）——
+    // hasPet 口径：定位器的桌宠窗 bounds 有效 且 最近一次真实检测未过期（petinfo 失败时会保留 last-good bounds，
+    // 不能只看 windowBounds()，否则桌宠退出后 bounds 仍残留、永远不会隐藏）
+    const locState = locator ? locator.status() : null;
+    const petBoundsRaw = locator ? locator.windowBounds() : null;
+    const hasPet = !!(locState && locState.ok === true && petBoundsRaw && Number.isFinite(petBoundsRaw.x));
+    const nowPet = Date.now();
+    let reshowPending = false;
+    if (hasPet) {
+      petMissingSince = 0;
+      if (noPetHidden && cfg.enabled) reshowPending = true;
+    } else {
+      // 起算点用「最后一次成功检测的时间」：petinfo 在新采样失败时不刷新 lastOkAt，
+      // 这样「桌宠退出 → 5s 后隐藏」的计时从真·最后一帧算起，而不是等 3s 新鲜度过期后才开始
+      if (!petMissingSince) {
+        const ageMs = locState && Number.isFinite(locState.ageMs) ? Number(locState.ageMs) : NaN;
+        petMissingSince = Number.isFinite(ageMs) ? (nowPet - ageMs) : nowPet;
+      }
+      const missingMs = nowPet - petMissingSince;
+      const pastGrace = (nowPet - appStartedAt) >= NO_PET_STARTUP_GRACE_MS;
+      if (!noPetHidden && panelShown && missingMs >= NO_PET_HIDE_MS && pastGrace) {
+        try { panelWin.hide(); } catch (e) { /* ignore */ }
+        panelShown = false;
+        noPetHidden = true;
+        logger.write(`panel hide reason=no-pet detectFailMs=${Math.round(missingMs)}`);
+      }
+    }
+    // 第 12 轮甲路：桌宠缺失期间「原地不动」——宽限期保持最后位置直到点隐藏，隐藏后同样不跑兜底 placement。
+    // 旧实现会用 computePlacement 的 fallback 坐标 setPosition，导致隐藏前先漂移到屏幕顶部兜底位。
+    if (!hasPet) { schedulePosition(); return; }
     const pet = {
       petBounds: locator ? locator.windowBounds() : null,
       headY: locator ? locator.headY() : NaN,
@@ -732,6 +1015,8 @@ function positionTick() {
       if (lastDisplayId != null) {
         logger.write(`display change ${lastDisplayId}->${place.displayId} snap&refresh`);
         anim.x = place.x; anim.y = place.y; anim.vx = 0; anim.vy = 0; anim.tx = place.x; anim.ty = place.y;
+        // #1 误触防护 ⑨：换屏 = 坐标基准变了 → 丢掉抖动窗口，不把系统跳变当晃动
+        if (shakeDetector) shakeDetector.clear(Date.now());
         requestState(true);
       }
       lastDisplayId = place.displayId;
@@ -787,13 +1072,21 @@ function positionTick() {
         logger.write(`place src=${place.src} petCenter=${place.centerX.toFixed(1)} targetX=${place.x} targetY=${place.y} w=${panelSize.w} h=${panelSize.h} wear=${cfg.display.wear} focusHead=${cfg.display.wear === 'head'} detect=${locator ? JSON.stringify(locator.status()) : '{}'}`);
       }
     }
+    // 第 11 轮丁路：桌宠回来 → 自动显示（本帧位置已更新，避免在兜底位置闪一下）
+    if (reshowPending && cfg.enabled) {
+      try { panelWin.showInactive(); } catch (e) { /* ignore */ }
+      panelShown = true;
+      noPetHidden = false;
+      logger.write('panel show reason=pet-detected');
+    }
     // #5：定位就绪（或兜底截止）后才显示窗口，避免启动时在兜底位置闪一下再飞到桌宠头顶
     if (!panelShown && cfg.enabled) {
       // 就绪 = 目标已经来自真实定位（detect/detect），而不是兜底值；兜底截止只防权限异常时窗口不出现
       const detectReady = String(place.src || '').split('/')[0] === 'detect' && String(place.src || '').split('/')[1] === 'detect';
       // 尺寸基准也稳定后（charW 中值有 5 帧）再显示 → 首次可见就是最终尺寸/最终位置（旧版显示后还会重排一次）
       const sizeReady = charWHist.length >= 5 && Number.isFinite(currentCharW());
-      if ((detectReady && sizeReady) || Date.now() >= panelShowDeadline) {
+      // 第 11 轮丁路：启动时没有桌宠要保持隐藏（等检测到再出现），避免登录时无 Coopanion 也弹兜底窗
+      if (hasPet && ((detectReady && sizeReady) || Date.now() >= panelShowDeadline)) {
         try { panelWin.showInactive(); } catch (e) { /* ignore */ }
         panelShown = true;
         logger.write(`panel shown detectReady=${detectReady} sizeReady=${sizeReady} src=${place.src} pos=${nx},${ny}`);
@@ -829,6 +1122,126 @@ function registerHotkey() {
   } catch (e) { /* ignore */ }
 }
 
+// ---------------- #4 托盘「测试余额连接…」（只读校验；不显示、不记录任何 key） ----------------
+// 数据层：providers.verifyKey(pc) 只读 GET 余额接口 → {ok, code, latencyMs}（不返回密钥）。
+// 用户可见：弹窗 ≤3 行摘要（成功 n 家 / 失败分类计数）；日志只记「分类码 + 耗时」，不记 key / 响应体。
+const CONN_TEST_MAX_LINES = 3;
+/** 分类码 → 短标签（取 errorText 冒号前的第一段，避免另维护一份文案表）。 */
+function shortErrorLabel(code) {
+  const c = String(code || 'UNKNOWN');
+  try {
+    const txt = String(providerErrorText(c) || '');
+    const head = txt.split('：')[0].split('（')[0].trim();
+    if (head) return head;
+  } catch (e) { /* ignore */ }
+  return c;
+}
+
+/** 托盘弹窗的 3 行内摘要（纯函数，可单测）：成功 n 家 / 失败分类计数 / 提示看日志。 */
+function buildConnectionSummary(results) {
+  const list = Array.isArray(results) ? results : [];
+  const nonRice = list.filter(r => r && !r.rice);
+  const riceN = list.length - nonRice.length;
+  const okN = nonRice.filter(r => r.ok).length;
+  const failN = nonRice.length - okN;
+  const lines = [];
+  let head = `测试完成：成功 ${okN} 家`;
+  if (failN > 0) head += ` / 失败 ${failN} 家`;
+  if (riceN > 0) head += `（大白饭 ${riceN} 家不联网，已跳过）`;
+  lines.push(head);
+  if (failN > 0) {
+    const order = [];
+    const cnt = new Map();
+    for (const r of nonRice) {
+      if (r.ok) continue;
+      const c = String(r.code || 'UNKNOWN');
+      if (!cnt.has(c)) { cnt.set(c, 0); order.push(c); }
+      cnt.set(c, cnt.get(c) + 1);
+    }
+    lines.push('失败分类：' + order.slice(0, 4).map(c => `${shortErrorLabel(c)} ×${cnt.get(c)}`).join(' · '));
+    lines.push('详情见面板日志（已脱敏，只记分类码）');
+  } else {
+    lines.push('全部连接正常（详情见面板日志，已脱敏）');
+  }
+  return lines.slice(0, CONN_TEST_MAX_LINES);
+}
+
+/**
+ * 对全部 enabled provider 做一次只读主动校验（大白眼档跳过，不联网）。
+ * @param {string} source tray | selftest
+ * @returns {Promise<{results:Array, lines:string[]}>}
+ */
+async function runConnectionTest(source) {
+  const src = String(source || 'tray');
+  if (!cfg) return { results: [], lines: ['配置未加载，无法测试'] };
+  const list = (cfg.providers || []).filter(p => p && p.enabled);
+  const results = [];
+  for (const pc of list) {
+    const t0 = Date.now();
+    let r = null;
+    try {
+      r = (pc.type === 'rice')
+        ? { ok: true, code: 'OK', rice: true, latencyMs: 0, amount: null }
+        : await verifyKey(pc);
+    } catch (e) {
+      r = { ok: false, code: 'UNKNOWN', latencyMs: Date.now() - t0 };
+    }
+    if (!r || typeof r !== 'object') r = { ok: false, code: 'UNKNOWN', latencyMs: Date.now() - t0 };
+    const item = {
+      id: String(pc.id || ''),
+      name: String(pc.name || pc.id || ''),
+      type: String(pc.type || ''),
+      rice: pc.type === 'rice',
+      ok: !!r.ok,
+      code: r.ok ? 'OK' : String(r.code || 'UNKNOWN'),
+      latencyMs: Number(r.latencyMs) || (Date.now() - t0),
+      amount: Number.isFinite(r.amount) ? r.amount : null,
+    };
+    results.push(item);
+    // 只记分类码 + 耗时（金额是用户自己的余额，属可展示数据）；不记 key / 响应体 / 完整错误文案
+    logger.write(`test-connection source=${src} id=${item.id} ok=${item.ok ? 1 : 0} code=${item.code} ms=${item.latencyMs}` + (item.amount != null ? ` amount=${item.amount}` : ''));
+  }
+  const lines = buildConnectionSummary(results);
+  logger.write(`test-connection done source=${src} tested=${results.filter(r => !r.rice).length} ok=${results.filter(r => !r.rice && r.ok).length} fail=${results.filter(r => !r.rice && !r.ok).length} lines=${lines.length}`);
+  return { results, lines };
+}
+
+/** 显示 3 行内摘要（系统弹窗；不抢焦点、不带图标）。 */
+function showConnectionTestResult(lines) {
+  const body = (Array.isArray(lines) ? lines : []).slice(0, CONN_TEST_MAX_LINES).join('\n');
+  logger.write(`test-connection dialog lines=${body ? body.split('\n').length : 0}`);
+  try {
+    if (dialog && typeof dialog.showMessageBox === 'function') {
+      return dialog.showMessageBox({ type: 'info', title: '余额连接测试', message: '余额连接测试结果', detail: body, buttons: ['好'], defaultId: 0, noLink: true }).catch(() => {});
+    }
+  } catch (e) {
+    logger.write('test-connection dialog failed ' + String(e && e.message || e));
+  }
+  return Promise.resolve();
+}
+
+/** 托盘菜单项点击入口：跑测试 → 弹摘要（异常只记日志，不弹错误详情）。 */
+function runConnectionTestFromTray() {
+  logger.write('test-connection tray click');
+  return runConnectionTest('tray')
+    .then((r) => { if (r) return showConnectionTestResult(r.lines); return null; })
+    .catch((e) => { logger.write('test-connection tray failed ' + String(e && e.message || e)); });
+}
+
+/** 托盘菜单模板（独立成函数：自测可 dump 标签，不依赖真实 Tray） */
+function buildTrayMenuTemplate() {
+  return [
+    { label: '饭桶余额 · Mac 显示窗', enabled: false },
+    { type: 'separator' },
+    { label: '立即刷新', click: () => { if (providerMgr) providerMgr.configure(cfg); requestState(true); } },
+    { label: expanded ? '收起明细' : '展开明细', click: () => { if (toggleDetail('tray')) { try { tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate())); } catch (e) { /* ignore */ } } } },
+    { label: '测试余额连接…', click: () => { runConnectionTestFromTray(); } },
+    { label: '打开配置目录', click: () => { try { shell.openPath(configMod.userDir()); } catch (e) { /* ignore */ } } },
+    { type: 'separator' },
+    { label: '退出', click: () => { trayQuitRequested = true; app.quit(); } },
+  ];
+}
+
 // ---------------- 托盘 ----------------
 function setupTray() {
   try {
@@ -838,17 +1251,9 @@ function setupTray() {
     img.setTemplateImage(true);
     tray = new Tray(img);
     tray.setToolTip(APP_NAME);
-    const build = () => Menu.buildFromTemplate([
-      { label: '饭桶余额 · Mac 显示窗', enabled: false },
-      { type: 'separator' },
-      { label: '立即刷新', click: () => { if (providerMgr) providerMgr.configure(cfg); requestState(true); } },
-      { label: expanded ? '收起明细' : '展开明细', click: () => { expanded = !expanded; requestState(true); } },
-      { label: '打开配置目录', click: () => { try { shell.openPath(configMod.userDir()); } catch (e) { /* ignore */ } } },
-      { type: 'separator' },
-      { label: '退出', click: () => { trayQuitRequested = true; app.quit(); } },
-    ]);
-    tray.setContextMenu(build());
-    tray.on('click', () => { expanded = !expanded; requestState(true); tray.setContextMenu(build()); });
+    tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate()));
+    tray.on('click', () => { if (toggleDetail('tray')) tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenuTemplate())); });
+    logger.write('tray setup ok items=' + buildTrayMenuTemplate().filter(x => x.label).length);
   } catch (e) {
     logger.write('tray setup failed ' + String(e && e.message || e));
   }
@@ -857,19 +1262,24 @@ function setupTray() {
 // ---------------- 启动 ----------------
 function startPanelIfReady() {
   if (!panelWin) createPanelWindow();
-  else if (cfg.enabled && panelShown) panelWin.showInactive();
+  // 第 11 轮丁路：因桌宠缺失而隐藏的窗口不在这里复活（等 positionTick 检测到桌宠再显示）
+  else if (cfg.enabled && panelShown && !noPetHidden) panelWin.showInactive();
 }
 
 function startLoops() {
   if (loopStopped) return;
-  providerMgr = new ProviderManager({});
+  providerMgr = new ProviderManager({ onUpdate: () => requestState(true) });
   providerMgr.configure(cfg);
   providerMgr.start();
   if (ARGS.demo > 0) { providerMgr.demoCount = Math.min(9, ARGS.demo); }
   else if (demoMode) { providerMgr.demoCount = 3; }
 
-  locator = new PetLocator({ binary: PETPROBE, intervalMs: Math.max(120, cfg.liveFollow.detectMs || 250) });
+  // #1：启用了抖动判定时采样间隔取 min(liveFollow.detectMs, shake.detectMs)，默认 250→125ms
+  const baseDetectMs = Math.max(120, cfg.liveFollow.detectMs || 250);
+  const shakeDetectMs = cfg.interaction.shake.enabled ? Math.max(120, cfg.interaction.shake.detectMs || 125) : baseDetectMs;
+  locator = new PetLocator({ binary: PETPROBE, intervalMs: Math.min(baseDetectMs, shakeDetectMs) });
   locator.start();
+  applyShakeRuntime('loops-start');
 
   // 主题轮询（按 pollMs 链式）
   const themeLoop = async () => {
@@ -929,6 +1339,8 @@ function runSelftest(outPath) {
     generatedAt: new Date().toISOString(),
     env: { platform: process.platform, arch: process.arch, electron: process.versions.electron, node: process.versions.node },
     graphicsScale: { p1: +layoutMod.graphicsScale(configMod.normalizeConfig({}), 1).toFixed(4), p105: +layoutMod.graphicsScale(configMod.normalizeConfig({}), 1.05).toFixed(4), p2: +layoutMod.graphicsScale(configMod.normalizeConfig({}), 2).toFixed(4) },
+    // #1：抖动手势配置归一化结果（含默认值），随自测 JSON 一起落盘便于回归核对
+    interaction: { expandOnClick: cfg.interaction.expandOnClick, shake: cfg.interaction.shake, canExpand: canExpandDetailFor(cfg) },
     wear: {
       contactPx: layoutMod.contactPx(1),
       headPanelY: layoutMod.headPanelY(786, 64, 3, 33, 956),
@@ -940,6 +1352,140 @@ function runSelftest(outPath) {
   try { fs.writeFileSync(outPath, JSON.stringify(out, null, 2)); } catch (e) { /* ignore */ }
   logger.write('selftest written ' + outPath + ' cases=' + cases.length);
   console.log('selftest ->', outPath);
+  app.quit();
+}
+
+// ---------------- 抖动识别 headless 自测（无窗口、无 GUI；走真实 main.js 代码路径）----------------
+// 用法：node main.js --shake-selftest <out.json> --shake-script <in.json> --config <test.json>
+// 输入脚本：{ "baseT": 0, "samples": [ {"t":0,"x":100}, {"t":125,"x":140}, {"reset":true,"t":3000}, ... ] }
+//   每条 sample = 一次 petprobe 新采样（t=虚拟时钟 ms，x=bodyCenterPt）；经
+//   petSampleTick → feedShakeSample → ShakeDetector → onShakeTrigger → toggleDetail('shake') → requestState。
+//   petSampleTick / 检测器 / 切换入口 / 日志 / 配置归一化全部是正式代码，只有采样源是脚本注入。
+// 输出：每条采样的触发/expanded/检测器窗口状态 + 配置归一化结果 + canExpand + 触发汇总。
+function runShakeSelftest(scriptPath, outPath) {
+  const out = {
+    tool: 'shake-selftest', app: APP_NAME, version: APP_VERSION,
+    generatedAt: new Date().toISOString(), scriptPath: String(scriptPath || ''), errors: [],
+    shakeConfig: cfg ? cfg.interaction.shake : null,
+    interaction: cfg ? cfg.interaction : null,
+    clickThrough: cfg ? cfg.clickThrough : null,
+    expandOnClick: cfg ? cfg.interaction.expandOnClick : null,
+    liveFollowDetectMs: cfg ? cfg.liveFollow.detectMs : null,
+    effectiveDetectMs: 0, baseT: 0, canExpand: false,
+    steps: [], triggers: [], triggerCount: 0, expandedFinal: false,
+  };
+  let script = null;
+  try { script = JSON.parse(fs.readFileSync(scriptPath, 'utf8')); } catch (e) { out.errors.push('读取 --shake-script 失败: ' + String(e && e.message || e)); }
+  if (!cfg) out.errors.push('配置未加载（cfg=null）');
+  if (!script && !out.errors.length) out.errors.push('脚本内容为空');
+  if (out.errors.length) {
+    try { fs.writeFileSync(outPath, JSON.stringify(out, null, 2)); } catch (e) { /* ignore */ }
+    console.log('shake-selftest failed ->', outPath, out.errors.join('; '));
+    app.quit();
+    return;
+  }
+  // 真实采样间隔（与 applyShakeRuntime 同口径）
+  const baseMs = Math.max(120, cfg.liveFollow.detectMs || 250);
+  const sc = cfg.interaction.shake;
+  out.effectiveDetectMs = sc.enabled ? Math.min(baseMs, Math.max(120, sc.detectMs || 125)) : baseMs;
+  out.canExpand = canExpandDetailFor(cfg);
+  // 假 locator：字段与真实 petprobe 一致；每次喂样前递增 lines 触发 petSampleTick 的「新采样」分支
+  locator = {
+    lines: 0, info: {}, intervalMs: out.effectiveDetectMs, stopped: false,
+    isFresh: () => true, start() {}, stop() {}, setIntervalMs() { return false; },
+    windowBounds: () => null, headY: () => 800, feetY: () => 900, centerX: () => 0,
+    status: () => ({ ok: true, fake: true }),
+  };
+  panelShown = true; // 无窗自测：让 feedShakeSample 走「面板已显示」分支
+  sampleLineSeen = -1;
+  expanded = false;
+  ensureShakeDetector();
+  const baseT = Number.isFinite(Number(script.baseT)) ? Number(script.baseT) : 0;
+  shakeDetector.reset(baseT, 'shake-selftest');
+  out.baseT = baseT;
+  logger.write(`shake reset reason=shake-selftest enabled=${sc.enabled} windowMs=${sc.windowMs} reverse=${sc.reverseCount} amp=${sc.minAmplitudePt} path=${sc.minPathPt} quiet=${sc.quietGapMs} grace=${sc.startupGraceMs} detect=${out.effectiveDetectMs}ms`);
+  for (const item of (Array.isArray(script.samples) ? script.samples : [])) {
+    const t = Number(item && item.t);
+    if (!Number.isFinite(t)) { out.steps.push({ invalid: true, raw: item }); continue; }
+    if (item && item.reset) {
+      shakeDetector.reset(t, 'case-reset');
+      expanded = false;
+      out.steps.push({ t, reset: true, expanded, canExpand: canExpandDetailFor(cfg) });
+      continue;
+    }
+    const x = Number(item && item.x);
+    locator.lines += 1;
+    locator.info = { bodyCenterPt: x, centerPt: x, headPt: 800, feetY: 900, charWpt: 86.5 };
+    lastShakeTrigger = null;
+    petSampleTick(t);
+    const trig = lastShakeTrigger;
+    if (trig) out.triggers.push(trig);
+    out.steps.push({
+      t, x, triggered: !!trig, trigger: trig || null,
+      expanded, state: shakeDetector.state(t),
+    });
+  }
+  out.expandedFinal = expanded;
+  out.triggerCount = out.triggers.length;
+  try { fs.writeFileSync(outPath, JSON.stringify(out, null, 2)); } catch (e) { out.errors.push('写输出失败: ' + String(e && e.message || e)); }
+  console.log('shake-selftest ->', outPath, 'steps=' + out.steps.length, 'triggers=' + out.triggers.length);
+  logger.write(`shake-selftest steps=${out.steps.length} triggers=${out.triggers.length}`);
+  app.quit();
+}
+
+// ---------------- #4 安全数据层接入 · headless 自测（无窗口；真实 providers.js） ----------------
+// 用法：node main.js --security-selftest <out.json> --config <测试配置>
+// 内容：① 「测试余额连接…」同一函数（providers.verifyKey 只读校验）→ 每家分类码 + 3 行内摘要；
+//      ② 拉真实 views() → buildDetail() → 明细卡每行副标题（失败行带分类中文）；
+//      ③ 未知分类码回退文案 + 托盘菜单标签 dump（证明新入口存在）。
+async function runSecuritySelftest(outPath) {
+  const out = {
+    tool: 'security-selftest', app: APP_NAME, version: APP_VERSION,
+    generatedAt: new Date().toISOString(), configPath: configPathUsed, errors: [],
+    env: { platform: process.platform, arch: process.arch, electron: process.versions.electron || '', node: process.version },
+    connection: null, menuLabels: [], detail: null, unknownFallback: '',
+    limits: { summaryMaxLines: CONN_TEST_MAX_LINES },
+  };
+  try { out.menuLabels = buildTrayMenuTemplate().map(it => (it && it.type === 'separator') ? '---' : String((it && it.label) || '')); }
+  catch (e) { out.errors.push('menu: ' + String(e && e.message || e)); }
+  try {
+    const conn = await runConnectionTest('selftest');
+    out.connection = { results: conn.results, lines: conn.lines, lineCount: (conn.lines || []).length };
+  } catch (e) { out.errors.push('connection: ' + String(e && e.message || e)); }
+  // 等 ProviderManager 首轮结果，取真实 views 构建明细卡（桌面真实状态；超时 12s）
+  try {
+    providerMgr = new ProviderManager({ onUpdate: () => requestState(true) });
+    providerMgr.configure(cfg);
+    providerMgr.start();
+    const deadline = Date.now() + 12000;
+    while (Date.now() < deadline) {
+      const vs = providerMgr.views();
+      const pending = vs.filter(v => !v.rice && !v.hasResult).length;
+      if (vs.length && pending === 0) break;
+      await new Promise(r => setTimeout(r, 120));
+    }
+    const views = providerMgr.views();
+    const w = detailCardWidthNeeded(views, 240, 460);
+    const h = 34 + views.length * 30 + 24;
+    const detail = buildDetail(views, w, h);
+    out.detail = {
+      count: views.length, w, h, title: detail.title, footer: detail.footer,
+      rows: detail.rows.map((r, i) => ({
+        name: r.name, amountText: r.amountText, ok: r.ok, rice: r.rice,
+        errorCode: r.errorCode, sub: r.sub,
+        viewOk: !!(views[i] && views[i].ok), viewHasResult: !!(views[i] && views[i].hasResult),
+      })),
+    };
+    try { providerMgr.stop(); } catch (e) { /* ignore */ }
+  } catch (e) { out.errors.push('detail: ' + String(e && e.message || e)); }
+  // 未知分类码回退（不依赖真实数据）
+  try {
+    const fake = buildDetail([{ name: '未知码', rice: false, ok: false, hasResult: true, errorCode: 'NO_SUCH_CODE_XYZ', threshold: 5, intervalSec: 60, amount: null, currency: 'CNY', low: false }], 300, 80);
+    out.unknownFallback = fake.rows[0] ? fake.rows[0].sub : '';
+  } catch (e) { out.errors.push('unknown: ' + String(e && e.message || e)); }
+  try { fs.writeFileSync(outPath, JSON.stringify(out, null, 2)); } catch (e) { out.errors.push('write: ' + String(e && e.message || e)); }
+  console.log('security-selftest ->', outPath, 'conn=' + (out.connection ? out.connection.results.length : 0), 'detailRows=' + (out.detail ? out.detail.rows.length : 0), 'errors=' + out.errors.length);
+  logger.write(`security-selftest conn=${out.connection ? out.connection.results.length : 0} detailRows=${out.detail ? out.detail.rows.length : 0} errors=${out.errors.length}`);
   app.quit();
 }
 
@@ -1049,8 +1595,8 @@ async function runShots(outDir) {
     }
     // mix：正常+低额+满盆+断线+大白饭混合
     await captureCase('state_mix_L3_pyramid_head_dark_s1', baseCfg(), demoViews(9, 'normal'), darkStyle, 1, { state: 'mix' });
-    // 3) 4 种饭桶
-    for (const bowl of ['porcelain', 'black', 'steel', 'enamel']) {
+    // 3) 3 种饭桶（白瓷 / 黑陶 / 不锈钢；搪瓷已下线，旧配置 enamel 会回退白瓷）
+    for (const bowl of ['porcelain', 'black', 'steel']) {
       const raw = Object.assign({}, rawOrDemo(), {
         display: { bowlStyle: bowl, labelStyle: 'L3', nineLayout: 'pyramid', wear: 'head' },
         theme: { force: 'dark', follow: true },
@@ -1125,6 +1671,31 @@ if (!gotLock) {
     loadConfig();
     installThemeWatch();
     if (ARGS.selftest) { runSelftest(ARGS.selftest); return; }
+    if (ARGS.shakeSelftest) { runShakeSelftest(ARGS.shakeScript, ARGS.shakeSelftest); return; }
+    if (ARGS.securitySelftest) { runSecuritySelftest(ARGS.securitySelftest).catch((e) => { logger.write('security-selftest fatal ' + String(e && e.message || e)); app.quit(); }); return; }
+    if (ARGS.connUiSelftest) {
+      // 真机验证「托盘测试余额连接…」的弹窗路径：跑同一函数 → 弹同一摘要 → 外部按 Esc 关闭后退出
+      setTimeout(async () => {
+        const rec = { tool: 'conn-ui-selftest', lines: [], dialogShown: false, dialogClosed: false, error: '', startedAt: new Date().toISOString() };
+        try {
+          const r = await runConnectionTest('tray');
+          rec.lines = (r && r.lines) || [];
+          logger.write('conn-ui-selftest lines=' + rec.lines.length);
+          const p = showConnectionTestResult(rec.lines);
+          rec.dialogShown = true;
+          await p;
+          rec.dialogClosed = true;
+          rec.closedAt = new Date().toISOString();
+          logger.write('conn-ui-selftest closed');
+        } catch (e) {
+          rec.error = String(e && e.message || e);
+          logger.write('conn-ui-selftest failed ' + rec.error);
+        }
+        try { fs.writeFileSync(ARGS.connUiSelftest, JSON.stringify(rec, null, 2)); } catch (e) { /* ignore */ }
+        app.quit();
+      }, 2000);
+      return;
+    }
     scanAssets();
     assetSignature = assets.signature;
     applyTheme('boot'); // #7：启动即按系统深浅色出首帧（不再先深色后切）

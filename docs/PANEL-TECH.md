@@ -1,5 +1,6 @@
 > 本文件是 Windows 显示窗程序的技术参考：配置字段、定位算法、渲染与调试工具。
 > 安装与构建步骤见仓库根目录 [README.md](../README.md) 与 [INSTALL.md](../INSTALL.md)。
+> **版本口径：0.0.4（开发中，尚未发布）** —— 内置外观为三款（白瓷 / 黑陶 / 不锈钢）；「搪瓷（`enamel`）」外观自 0.0.4 起整套删除，旧配置自动回退白瓷（详见下文 `display.bowlStyle` 与「饭桶资源」两节）。
 
 # 饭桶余额（GluttonBalance）· 技术说明
 
@@ -165,7 +166,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 | 新配置字段 | 说明 |
 |---|---|
 | `display.style` | `ricebowl`（默认，白饭桶）/ `capsule`（旧胶囊回退） |
-| `display.bowlStyle` | `porcelain` 白瓷饭桶（默认）/ `black` 黑陶饭桶 / `steel` 不锈钢饭桶 / `enamel` 搪瓷饭桶；自定义 `custom:<名字>`（导入说明见下文「饭桶资源」） |
+| `display.bowlStyle` | `porcelain` 白瓷饭桶（默认）/ `black` 黑陶饭桶 / `steel` 不锈钢饭桶；自定义 `custom:<名字>`（导入说明见下文「饭桶资源」）。**0.0.4 起删除 `enamel` 搪瓷外观：旧配置写 `enamel` 会自动回退 `porcelain`（白瓷）** |
 | `display.nineLayout` | 家数 > `compactAfter` 时的排法：`pyramid` **金字塔（默认：底 4 / 中 3 / 顶 2，3 排完整可读，最底排最前）** / `row` 一排 9 只 / `twoRows` 两排（前 5 后 4，旧行为保留）。**旧值 `row9` 自动迁移为 `pyramid`**（旧默认值，仅内存归一，不改 config 字节）；显式 `row`/`twoRows` 保留 |
 | `display.compactAfter` | 超过多少家进入紧凑模式，默认 5 |
 | `display.refYuan` | 全兜底满盆金额（provider 没填 fullAmount 时用），默认 100 |
@@ -180,8 +181,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 | `position.monitorFollow` | 面板跟随桌宠所在显示器的工作区与 DPI（Per-Monitor V2），默认 true |
 
 - **布局与几何**：2 家盆 90×52、间距 8（组宽 188、组高 62）；**默认头顶（`display.wear=head`）**：盆组底=角色头顶+3×dpi、桌宠不抬升、贴边 clamp；切 `feet` 时盆底固定 `工作区底 − bottomGap(8) = 1384`、桌宠上移脚底踩盆沿（误差 ≤2px）。9 家 `pyramid` 金字塔三排完整可读（底 4/中 3/顶 2，排间纵向错位 = 桶高 + 米堆余量，不遮后排名牌），组更窄更高，`--selftest layoutProbe` 有逐槽几何。
-- **主题联动**：盆体材质（钢/搪瓷/陶瓷）不跟主题变；铭牌底色、描边、名称/金额/状态点/阴影颜色跟随 Coopanion dark/light 主题（浅色自动浅色），每 3s 或主题变化时刷新。**Mac 0.0.3（开发中）：主题来源改为 macOS 系统深浅色（Electron `nativeTheme` + `updated` 事件），系统外观切换即时生效；`theme.force` 手设优先级保留。**
-- **动效**：60fps 弹簧缓动（到点轻微回弹）+ 静止 1px 内浮动；`display.wheels=true` 且 `wear=feet` 时盆底双轮随位移按速度旋转（轮子角度连续累计，不跳帧）、静止停转；`wear=head` 强制无轮（隐藏彩蛋口径）。**Mac 0.0.3（开发中）：改为临界阻尼跟随（无过冲、按真实 dt 积分）、取消静止浮动、改尺寸按底边中点锚定、定位与尺寸就绪后才显示；Win 端待同批修复。**
+- **主题联动**：盆体材质（钢/陶瓷）不跟主题变；铭牌底色、描边、名称/金额/状态点/阴影颜色跟随 Coopanion dark/light 主题（浅色自动浅色），每 3s 或主题变化时刷新。**Mac 0.0.3 起：主题来源改为 macOS 系统深浅色（Electron `nativeTheme` + `updated` 事件），系统外观切换即时生效；`theme.force` 手设优先级保留。**
+- **动效**：60fps 弹簧缓动（到点轻微回弹）+ 静止 1px 内浮动；`display.wheels=true` 且 `wear=feet` 时盆底双轮随位移按速度旋转（轮子角度连续累计，不跳帧）、静止停转；`wear=head` 强制无轮（隐藏彩蛋口径）。**Mac 0.0.3 起：改为临界阻尼跟随（无过冲、按真实 dt 积分）、取消静止浮动、改尺寸按底边中点锚定、定位与尺寸就绪后才显示；Win 端未移植（0.0.4 仍未同步，属已知差异，不算回归）。**
 - **无窗口工具**（给测试/出图，不建窗口、不打扰正在运行的面板）：
   - `panel.exe --selftest <out.json>`：输出 env（显示器/工作区/DPI 感知/`wear`+`wearRaw`/`nineLayout`+`nineLayoutRaw`）+ `ricebowl`/`capsule` 两种形态 × 2..9 家 × dpiScale 1.0/1.25/1.5 的几何（宽/高/step/组高/组顶/组底/居中/lift/compact/`pyramid`/`rowCounts`）+ **`layoutProbe{}`**（pyramid 6..9 家 × 四档缩放逐槽几何、row/twoRows 兼容、可读性对比）。
   - `panel.exe --demo N [--shot <png>] [--label L1|L2|L3] [--wear head|feet] [--layout pyramid|row|twoRows] [--theme dark|light] [--scale 0.5|1|1.5|2] [--state normal|low|offline|rice]`：N 家演示数据（前 2 家真实样例 + 其余用「大白饭」档凑数）；带 `--shot` 时按给定组合渲染 PNG 后退出，不开窗口、不写 config。
@@ -192,8 +193,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 ## v3 资源化渲染（2026-10-31 晚）
 
 - **尺寸跟随桌宠**：`graphicsScale = clamp(/api/state 的 petScale ÷ display.petScaleRef, display.graphicsMin, display.graphicsMax)`；默认 `petScaleRef=1.05`（100% 时 scale=1.05）。盆宽 = `77px × 0.80 × graphicsScale × dpiScale`（77px=100% 时实测角色像素宽），盆高/组高/米饭窗口/标签字号全部同比例；盆底固定 1384，桌宠 `lift = 6×graphicsScale + 组高`，角色大小变化时平滑过渡。100%（盆 62px/角色 77px）与 200%（盆 117px/角色 150px）比例偏差 <4%（误差 ±10%）。
-- **配置字段**：`display.bowlStyle`（预设 **`porcelain` 白瓷饭桶（默认）** / `black` 黑陶饭桶 / `steel` 不锈钢饭桶 / `enamel` 搪瓷饭桶；自定义 `custom:<名字>`）、`display.labelStyle`（**`L3` 盆沿木牌（默认）** / `L1` 盆沿小字 / `L2` 饭票小旗）、`display.wear`（`head` 头顶（默认）/ `feet` 脚下）、`display.nineLayout`（`pyramid` 金字塔（默认）/ `row` 一排 / `twoRows` 两排）、`display.petScaleRef/graphicsMin/graphicsMax`。
-- **饭桶资源（PNG+JSON）**：内置在 `bowls/`（black/porcelain/steel/enamel，随包发布、不含本机内容）；用户自定义放 `%USERPROFILE%\.dsh\pet-balance-panel\bowls\`；加载顺序：用户目录 → 内置，缺字段/损坏回退内置黑盆并在日志记 `WARN bowl load failed ... fallback=black`。
+- **配置字段**：`display.bowlStyle`（预设 **`porcelain` 白瓷饭桶（默认）** / `black` 黑陶饭桶 / `steel` 不锈钢饭桶；自定义 `custom:<名字>`；**0.0.4 起 `enamel` 搪瓷外观已删除，旧值自动回退 `porcelain`**）、`display.labelStyle`（**`L3` 盆沿木牌（默认）** / `L1` 盆沿小字 / `L2` 饭票小旗）、`display.wear`（`head` 头顶（默认）/ `feet` 脚下）、`display.nineLayout`（`pyramid` 金字塔（默认）/ `row` 一排 / `twoRows` 两排）、`display.petScaleRef/graphicsMin/graphicsMax`。
+- **饭桶资源（PNG+JSON）**：内置在 `bowls/`（black/porcelain/steel，随包发布、不含本机内容）；用户自定义放 `%USERPROFILE%\.dsh\pet-balance-panel\bowls\`；加载顺序：用户目录 → 内置，缺字段/损坏回退内置黑盆并在日志记 `WARN bowl load failed ... fallback=black`。
   - PNG：PNG-32 带透明通道、透明背景、只画空碗、碗居中、碗底贴图片底边；推荐 2x（内置为 400×340）。可选 `back` 字段指定内壁层（先画内壁→米饭→再画壳/前沿，实现「米盛在碗里」）。
   - 同名 JSON：`{"name":"白瓷碗","rice":{"x":90,"y":40,"w":220,"h":260},"rimY":160,"anchor":"bottom-center","scaleHint":1.0}`；`rice`=米饭可绘制矩形（图片坐标），米饭按 fill 0→1 从底往上长、可堆出沿；`rimY`=碗沿 y；`anchor` 默认 `bottom-center`；`scaleHint` 预留。
 - **米饭渲染**：预渲染 **11 档 fill（0..1）米粒位图** 缓存（`RiceCache`），60fps 只做 blit；米饭按碗内沿铺满、先米后碗（碗沿压住米下缘）、蓬松微起伏堆顶、浅灰米粒缝隙、无底部阴影；低额薄层/中档到盆口/满盆堆尖。
@@ -208,7 +209,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 
 ## v3-C 桶形版（2026-10-31 晚，第三次改版）
 
-- **圆柱饭桶**：4 个内置预设（`porcelain` 白瓷桶（默认）/ `black` 深色饭桶 / `steel` 不锈钢饭桶 / `enamel` 搪瓷饭桶）同一「直筒略收底 + 平口椭圆桶沿 + 1~2 圈桶箍 + 竖向高光」造型，材质配色不同；资源 320×400 PNG+back+JSON（1:1 桶约 62×74px，桶身正面直上直下）。
+- **圆柱饭桶**：3 个内置预设（`porcelain` 白瓷桶（默认）/ `black` 深色饭桶 / `steel` 不锈钢饭桶；0.0.4 起删除 `enamel` 搪瓷桶，旧配置回退白瓷）同一「直筒略收底 + 平口椭圆桶沿 + 1~2 圈桶箍 + 竖向高光」造型，材质配色不同；资源 320×400 PNG+back+JSON（1:1 桶约 62×74px，桶身正面直上直下）。
 - **分层**：`back`（内壁+后桶沿，无任何描边线）→ 米饭贴图 → `front`（桶身轮廓+前桶沿+桶箍+高光）。JSON 字段：`name / rice{x,y,w,h} / rimY（桶沿中心）/ rimBottom（前桶沿最低点）/ back / anchor / scaleHint`。
 - **米饭**：AI 米堆贴图；溢出高度 = fill × 45% 桶前脸（桶底−前桶沿最低点），fill≥0.8 溢出 ≥30%、fill=1 视觉 40~50%；桶组顶部预留 18% 高度避免堆顶裁平；米堆圆润、可略宽于桶口。
 - **木牌（L3）**：只含「绿点（左上角）+ ¥金额」，宽 ≈78% 桶宽（`0.78×BowlW`，且不小于 `36×scale`、不超桶宽−`2×scale`，随桌宠档位等比放大；原固定 40px 在 200% 档会遮不住金额）、高 13×scale（1:1 13px）、上沿 = 前桶沿最低点 +1px；金额 ≥9px 完整不省略。

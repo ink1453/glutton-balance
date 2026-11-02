@@ -671,7 +671,7 @@
 
   // -------------------------------------------------------------------------
   // 第 6 轮 A2 · #3 P0 渲染层小改（不动 assets、不改布局几何口径）
-  //   C：主题感知 1px 描边 + 桶底淡落影（浅底白瓷/搪瓷轮廓不再隐形）
+  //   C：主题感知 1px 描边 + 桶底淡落影（浅底白瓷/浅色桶轮廓不再隐形）
   //   D：back 浅主题压暗 14% + 内沿 1px 描边 + 接缝柔和暗弧
   //   K：深主题下深色桶身（黑陶/不锈钢）整幅提亮 8% + 弱亮边
   // -------------------------------------------------------------------------
@@ -969,18 +969,18 @@
   /** Win BowlRenderer.DrawStatusDot：暗影 + 实心 + 1px 白边 + 左上高光（三款共用）。 */
   function drawStatusDot(ctx, dcx, dcy, dotD, dot, scale) {
     if (!dot) return;
-    var dr = Math.max(1.5, dotD / 2);
+    var dr = Math.max(1.1, dotD / 2);
     ctx.save();
-    // P0-H：1px 灯座暗圈（状态点有「灯座」，小尺寸下更清楚）
+    // 状态灯缩小约 25%：细化灯座/高光，避免缩小后描边仍显得过大。
     ctx.strokeStyle = 'rgba(0,0,0,0.42)';
-    ctx.lineWidth = Math.max(0.8, 0.9 * scale);
-    ctx.beginPath(); ctx.arc(dcx, dcy, dr + 0.9 * scale, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = Math.max(0.6, 0.65 * scale);
+    ctx.beginPath(); ctx.arc(dcx, dcy, dr + 0.6 * scale, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = 'rgba(0,0,0,0.2745)'; // 70/255
-    ctx.beginPath(); ctx.arc(dcx, dcy + scale * 0.9, dr, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(dcx, dcy + scale * 0.5, dr, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = css(dot);
     ctx.beginPath(); ctx.arc(dcx, dcy, dr, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.8039)'; // 205/255
-    ctx.lineWidth = Math.max(1, 0.9 * scale);
+    ctx.lineWidth = Math.max(0.7, 0.65 * scale);
     ctx.beginPath(); ctx.arc(dcx, dcy, dr, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = 'rgba(255,255,255,0.4706)'; // 120/255
     ctx.beginPath();
@@ -1107,9 +1107,9 @@
       });
     }
 
-    // P0-H 绿点钮：名称与木牌之间；直径 4→5pt、中心下移 1pt（布局口径不动，只在渲染层放大）
-    var dotD = Math.max(numOr(plaque.dotD, 4 * scale), 5 * scale);
-    var dcy = numOr(plaque.dotCenterY, ty - dotD - 1.5 * scale) + 1.0 * scale;
+    // Mac 视觉微调：状态灯直径缩小约 25%；灯心正好位于名称下缘与木牌上缘中点。
+    var dotD = 3 * scale;
+    var dcy = numOr(plaque.dotCenterY, ty - dotD - 1.5 * scale);
     var lc = labelColors(view, lightBody, t);
     drawStatusDot(ctx, cx, dcy, dotD, lc.dot, scale);
   }
@@ -1141,9 +1141,9 @@
       drawText(ctx, fit.text, { x: cx, cy: nameCy, align: 'center', px: fit.px, weight: 'normal', color: css(lc.nameCol), halo: l1Halo, haloWidth: Math.max(1, 0.20 * fit.px) });
     }
 
-    // P0-H 绿点：与 L3 同口径（≥5pt、中心下移 1pt）
-    var dotD = Math.max(numOr(plaque.dotD, 4 * scale), 5 * scale);
-    var dcy = numOr(plaque.dotCenterY, numOr(plaque.valueCenterY, bottom) - dotD) + 1.0 * scale;
+    // Mac 视觉微调：状态灯直径缩小约 25%，灯心落在文字与数值带之间的中心。
+    var dotD = 3 * scale;
+    var dcy = numOr(plaque.dotCenterY, numOr(plaque.valueCenterY, bottom) - dotD);
     drawStatusDot(ctx, cx, dcy, dotD, lc.dot, scale);
 
     // 数值：居中在 valueCenterY（= L3 木牌带中心），缩字保证完整显示
@@ -1168,7 +1168,7 @@
     recordText({ style: 'L1', slot: slot.index, name: fit.text, namePx: +fit.px.toFixed(2), amount: val, amountPx: +fitV.px.toFixed(2) });
   }
 
-  /** L2 饭票小旗（Win BowlRenderer.MeasureFlag / DrawLabel 的 L2 分支）。 */
+  /** L2 饭票小旗：贴在饭桶前脸中心，轻微倾斜约15度。 */
   function drawLabelL2(ctx, t, slot, view, bowl, scale) {
     var cx = slot.x + slot.bowlW / 2;
     var lightBody = !!(bowl && bowl.lightBody);
@@ -1180,11 +1180,16 @@
     var baseNamePx = Math.max(8, 8 * scale);
     var baseValPx = Math.max(9, 9 * scale);
     var padX = 3.2 * scale;
-    var dotD = Math.max(numOr(plaque.dotD, 4 * scale), 5 * scale); // P0-H：状态点 4→5pt
-    if (dotD < 3.2) dotD = 3.2;
+    // Mac 视觉微调：旗面与灯的既有位置不变，只缩小约 25%。
+    var dotD = 3 * scale;
+    if (dotD < 2.4) dotD = 2.4;
     var flagH = Math.max(17, (baseNamePx + baseValPx) + 4);
-    var minW = Math.max(slot.bowlW * 0.62, baseValPx * 4.2);
-    var maxW = Math.max(minW, slot.bowlW * 0.98);
+    var flagAngle = -15 * Math.PI / 180; // Canvas 负角度：旗面右侧略上扬
+    var sinAngle = Math.abs(Math.sin(flagAngle));
+    var cosAngle = Math.abs(Math.cos(flagAngle));
+    var availableW = Math.max(8, (slot.bowlW - flagH * sinAngle - 2 * scale) / cosAngle);
+    var minW = Math.min(Math.max(slot.bowlW * 0.62, baseValPx * 4.2), availableW);
+    var maxW = availableW;
     var nameW0 = measureText(ctx, name, baseNamePx, 'normal');
     var valW0 = measureText(ctx, val, baseValPx, 'bold');
     var dotReserve = dotD + 1.5 * scale;
@@ -1198,53 +1203,59 @@
     var nameDraw = nameFit.w > nameAreaW + 0.5 ? ellipsizeEnd(ctx, name, nameFit.px, 'normal', nameAreaW) : name;
     var valDraw = valFit.w > textW + 0.5 ? ellipsizeEnd(ctx, val, valFit.px, 'bold', textW) : val;
 
-    var rimY = numOr(slot.rimY, 0);
-    var topY = Math.max(1, rimY - flagH - 1 * scale);
-    var px0 = cx - flagW / 2;
+    var rimBottom = numOr(slot.rimBottom, numOr(slot.rimY, 0));
+    var bottom = numOr(slot.bottom, rimBottom + slot.bowlH);
+    var flagTopExtent = flagW * sinAngle / 2 + flagH * cosAngle / 2;
+    var flagBottomExtent = flagTopExtent + 5 * scale * cosAngle;
+    var minCenterY = rimBottom + flagTopExtent + 0.5 * scale;
+    var maxCenterY = bottom - flagBottomExtent - 0.5 * scale;
+    var flagCenterY = (rimBottom + bottom) / 2;
+    if (minCenterY <= maxCenterY) flagCenterY = clamp(flagCenterY, minCenterY, maxCenterY);
 
-    // 旗杆：旗底向下 5px
     ctx.save();
+    ctx.translate(cx, flagCenterY);
+    ctx.rotate(flagAngle);
+
+    // 旗杆从旗底向下贴在桶身上；与旗面同向旋转。
     ctx.strokeStyle = 'rgba(150,138,118,0.9608)'; // 245/255
     ctx.lineWidth = Math.max(1, scale);
     ctx.beginPath();
-    ctx.moveTo(px0 + flagW * 0.5, topY + flagH - 1);
-    ctx.lineTo(px0 + flagW * 0.5, topY + flagH + 5);
+    ctx.moveTo(0, flagH / 2 - 1);
+    ctx.lineTo(0, flagH / 2 + 5 * scale);
     ctx.stroke();
-    ctx.restore();
 
-    // 旗面
     var flagCorner = Math.max(1.5, scale * 1.2);
-    fillRoundRect(ctx, px0 + 0.5, topY, flagW, flagH, flagCorner, 'rgba(250,247,239,0.9804)');
-    strokeRoundRect(ctx, px0 + 0.5, topY, flagW, flagH, flagCorner, 'rgba(182,172,154,0.9608)', Math.max(1, 0.8 * scale));
+    var flagX = -flagW / 2 + 0.5;
+    var flagY = -flagH / 2;
+    fillRoundRect(ctx, flagX, flagY, flagW, flagH, flagCorner, 'rgba(250,247,239,0.9804)');
+    strokeRoundRect(ctx, flagX, flagY, flagW, flagH, flagCorner, 'rgba(182,172,154,0.9608)', Math.max(1, 0.8 * scale));
 
-    // 名称：旗内上部（白纸旗上的深暖灰墨）
-    var nameRectX = px0 + padX;
-    var nameRectY = topY + flagH * 0.02;
+    // 名称、金额、状态点均在旗面的旋转坐标系中。
+    var nameRectX = flagX + padX;
+    var nameRectY = flagY + flagH * 0.02;
     var nameRectW = nameAreaW;
     var nameCy = nameRectY + flagH * 0.46 / 2;
     drawText(ctx, nameDraw, { x: nameRectX + nameRectW / 2, cy: nameCy, align: 'center', px: nameFit.px, weight: 'normal', color: 'rgba(118,108,90,1)' });
-    // 数值：旗内下部（浅盆深墨 / 深盆暖墨）
-    var valRectX = px0 + padX;
-    var valRectY = topY + flagH * 0.46;
-    var valRectW = textW;
+    var valRectX = flagX + padX;
+    var valRectY = flagY + flagH * 0.46;
     var valCy = valRectY + flagH * 0.52 / 2;
     drawText(ctx, valDraw, {
-      x: valRectX + valRectW / 2, cy: valCy, align: 'center', px: valFit.px, weight: 'bold',
+      x: valRectX + textW / 2, cy: valCy, align: 'center', px: valFit.px, weight: 'bold',
       color: lightBody ? 'rgba(56,50,40,1)' : 'rgba(60,54,44,1)'
     });
+    var dDotD = dotD;
+    var dCx = flagW / 2 - 1.5 * scale - dDotD / 2;
+    var dCy = flagY + 1.2 * scale + dDotD / 2;
+    drawStatusDot(ctx, dCx, dCy, dDotD, lc.dot, scale);
+    ctx.restore();
 
     recordText({
       style: 'L2', slot: slot.index, name: nameDraw, namePx: +nameFit.px.toFixed(2),
       amount: valDraw, amountPx: +valFit.px.toFixed(2),
       flagW: +flagW.toFixed(2), flagH: +flagH.toFixed(2),
+      flagCenterY: +flagCenterY.toFixed(2), flagAngleDeg: -15,
       nameEllipsized: nameDraw !== name, valEllipsized: valDraw !== val
     });
-
-    // 绿点：旗内右上
-    var dDotD = dotD;
-    var dCx = px0 + flagW - 1.5 * scale - dDotD / 2;
-    var dCy = topY + 1.2 * scale + dDotD / 2;
-    drawStatusDot(ctx, dCx, dCy, dDotD, lc.dot, scale);
   }
 
   function drawLabel(ctx, t, lay, slot, view, bowl) {
@@ -1386,7 +1397,9 @@
 
       var sub = row.sub != null ? String(row.sub) : '';
       if (sub) {
-        drawText(ctx, sub, {
+        // #4：失败行副标题可能较长（含分类中文原因）→ 按卡宽省略尾部，保证不溢出卡面
+        var subMaxW = Math.max(20, w - pad * 2 - Math.round(14 * scale));
+        drawText(ctx, ellipsizeEnd(ctx, sub, subPx, 'normal', subMaxW), {
           x: pad + Math.round(14 * scale), top: y + rowH * 0.56, align: 'left',
           px: subPx, weight: 'normal', color: css(t.hintColor)
         });

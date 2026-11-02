@@ -4,7 +4,7 @@
 
 ![9 家金字塔](screenshots/05-panel-pyramid-dark.png)
 
-> **当前版本：v0.0.3**（Coopanion 扩展 `pet-balance-world` 0.0.3；macOS 显示窗源码随本仓库 `mac/` 同步为 0.0.3；Windows 显示窗源码以本仓库 + Releases 历史资产为准）。
+> **当前版本：v0.0.4（开发中，尚未发布）**（Coopanion 扩展 `pet-balance-world`、macOS 显示窗、Windows 显示窗源码同号 0.0.4；上一个已发布版本为 0.0.3，正式发布与 Release 资产以 R-48 双端双网验证后为准）。
 
 > 🤖 **AI 一键安装（把这条链接交给你的 AI 助手）**：<https://raw.githubusercontent.com/ink1453/pet-balance-panel/main/AI-INSTALL.md>
 > 说明见 [`AI-INSTALL.md`](AI-INSTALL.md)（扩展 + Windows/macOS 两版显示窗的安装/验证/回滚步骤，不碰密钥）；备用下载入口：[Releases](https://github.com/ink1453/pet-balance-panel/releases/latest)。
@@ -32,7 +32,9 @@ screenshots/                            扩展设置页 / 显示窗截图
 
 - **一眼看余额**：每家 AI 服务一只小饭桶，米饭量 = 余额 ÷ 你设的「满盆金额」。低额薄薄一层、中档到桶口、满盆冒出桶沿，还有小绿点 / 红点当提示灯。
 - **最多 9 家**：DeepSeek 官方余额接口、new-api 中转站（自动换算额度与汇率）、自定义接口 + JSON 取值路径；另有一档「大白饭」不联网、永远满盆，适合演示。
-- **外貌可换**：白瓷 / 黑陶 / 不锈钢 / 复古蓝白搪瓷四款圆柱饭桶，数值样式三款（桶沿小字 / 饭票小旗 / 桶沿木牌）；也能导入自己画的饭桶（设置页内置绘制模板）。
+- **外貌可换**：白瓷 / 黑陶 / 不锈钢三款圆柱饭桶，数值样式三款（桶沿小字 / 饭票小旗 / 桶沿木牌）；也能导入自己画的饭桶（设置页内置绘制模板）。旧配置里的「搪瓷」外观已删除，会自动回退白瓷。
+- **晃晕唤出（macOS，0.0.4 起）**：在桌面上快速晃两下鼠标（2 秒内左右反转 ≥4 次）即可唤出 / 收起明细面板，误触保护四重；Windows 版仍用热键与点击展开。
+- **失败提示更清楚（0.0.4 起）**：余额查询失败按 18 类原因给中文提示（密钥无效 / 网络不通 / 额度不足等），托盘「测试余额连接…」可当场测一次；日志轮转保留、密钥二次脱敏，明细卡与日志都不显示完整密钥。
 - **跟着桌宠走**：随桌宠移动、缩放自动调整，不压任务栏，不抢焦点、不进 Alt+Tab；点击穿透默认开启。
 - **9 家排法**：金字塔（默认）/ 一排 / 两排，家数多了自动收紧。
 - **手动保存**：改完点「保存」才写入（不自动写盘，防误改）；每家可单独设提示灯阈值与刷新间隔（10–3600 秒）。
@@ -43,7 +45,7 @@ screenshots/                            扩展设置页 / 显示窗截图
 ## 安装（Windows）
 
 1. 在 Coopanion 扩展市场安装并启用「饭桶余额」（本条目为「需另装」类型）。
-2. 到本仓库 Releases 下载 Windows 显示窗源码包（`pet-balance-panel-x-0.0.2-src.zip`），按包内 `INSTALL.md` 用系统自带的 .NET Framework 4.8 编译，再运行 `install.ps1` 完成安装（装到用户主目录 `.dsh/pet-balance-panel`，写开机自启与开始菜单快捷方式，桌面零文件）。
+2. 到本仓库 Releases 下载 Windows 显示窗源码包（0.0.4 起为 `pet-balance-panel-x-0.0.4-src.zip`；当前已发布资产见 Releases），按包内 `INSTALL.md` 用系统自带的 .NET Framework 4.8 编译，再运行 `install.ps1` 完成安装（装到用户主目录 `.dsh/pet-balance-panel`，写开机自启与开始菜单快捷方式，桌面零文件）。
 3. 打开「饭桶余额」设置页，填余额来源，保存后约 5 秒生效。
 
 > 显示窗为源码自建、**未签名**，若出现「Windows 已保护你的电脑」提示属正常，点「更多信息 → 仍要运行」即可。
@@ -53,7 +55,7 @@ screenshots/                            扩展设置页 / 显示窗截图
 > 详细分步说明、权限与卸载见 [mac/INSTALL.md](mac/INSTALL.md)。
 
 1. 前置：**macOS 14+ / Apple 芯片（arm64）**、Coopanion 0.2.16+，并已在 Coopanion 里安装启用「饭桶余额」扩展。
-2. 到本仓库 Releases 下载 macOS 显示窗源码包（`pet-balance-panel-mac-0.0.2-src.zip`），或直接使用本仓库 [`mac/`](mac/) 目录。
+2. 到本仓库 Releases 下载 macOS 显示窗源码包（0.0.4 起为 `pet-balance-panel-mac-0.0.4-src.zip`；当前已发布资产见 Releases），或直接使用本仓库 [`mac/`](mac/) 目录。
 3. 下载 Electron 38.8.6 arm64 运行时（官方 `Electron.app`），放到 `mac/tools/Electron.app`，或用 `--electron-src=<路径>` 指定（运行时不进仓库）。
 4. 构建并安装：
 
@@ -78,7 +80,7 @@ screenshots/                            扩展设置页 / 显示窗截图
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)（当前 **v0.0.3**：主题跟随、动画漂移、皮肤 P0/P1、文案与图标更新）。
+见 [CHANGELOG.md](CHANGELOG.md)（当前 **v0.0.4（开发中）**：三套内置外观、删除搪瓷外观并回退白瓷、晃晕唤出、安全与失败提示优化、材质稿定稿）。
 
 ## 许可
 

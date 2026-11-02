@@ -174,8 +174,8 @@ if [ -f "$PLIST" ]; then
   pget() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST" 2>/dev/null; }
   expect() { local k="$1" want="$2" got; got="$(pget "$k")"
     if [ "$got" = "$want" ]; then ok "Info.plist $k = $want"; else bad "Info.plist $k = '${got}'（应为 '$want'）"; fi; }
-  expect CFBundleIdentifier "com.ricebowl.petbalancepanel"
-  expect CFBundleShortVersionString "0.0.2"
+  expect CFBundleIdentifier "com.maimai.petbalancepanel"
+  expect CFBundleShortVersionString "0.0.4"
   expect CFBundleVersion "1"
   expect CFBundleIconFile "app.icns"
   expect LSMinimumSystemVersion "14.0"
@@ -249,17 +249,24 @@ head1 "3. 本机路径 / 用户名"
 scan_pattern "本机绝对路径" '/Use''rs/[A-Za-z0-9._-]+' 0
 scan_pattern "本机绝对路径" '/home/[A-Za-z0-9._-]+' 0
 scan_pattern "本机绝对路径" 'C:\\\\?Users\\\\?[A-Za-z0-9._-]+' 0
-scan_pattern "本机用户名" '/Use''rs/ink' 0
-scan_pattern "本机用户名" '/home/ink' 0
-scan_pattern "本机用户名" 'ink@[A-Za-z0-9.-]+' 0
+# 本机用户名：运行时用 id -un 推导，不把某个用户名写死在公开仓库里
+CUR_USER="$(id -un 2>/dev/null || true)"
+if [ -n "$CUR_USER" ]; then
+  scan_pattern "本机用户名" "/Use""rs/${CUR_USER}" 0
+  scan_pattern "本机用户名" "/home/${CUR_USER}" 0
+  scan_pattern "本机用户名" "${CUR_USER}@[A-Za-z0-9.-]+" 0
+fi
 scan_pattern "工程目录名" 'pbp-mac|prep-1-3|pbp-mac/prep' 0
-# 旧 bundle id（改名前的旧组织标识）必须 0 命中：同样拆成拼接形式，扫描能力不减
-LEGACY_BUNDLE_ID="com."'mai'"mai"'.petbalancepanel'
+# 旧 bundle id（改名前的旧组织标识）必须 0 命中；现行 = com.maimai.petbalancepanel（与已安装 App / LaunchAgent 一致）。
+# 同样拆成拼接形式，避免脚本源码被公开仓扫描误判，扫描能力不减。
+LEGACY_BUNDLE_ID="com."'rice'"bowl"'.petbalancepanel'
 scan_pattern "旧 bundle id" "$LEGACY_BUNDLE_ID" 0
 scan_pattern "会话环境变量" 'ELECTRON_RUN_AS_NODE' 0
 scan_pattern "桌面路径" '/Desktop/' 0
-# 裸词 "ink"：代码里常是文字颜色变量名（ink/inkDim），只汇总提示、不判问题
-scan_pattern_warn_summary "裸词 ink（多半是代码变量名，仅提示）" '(^|[^A-Za-z0-9_])ink([^A-Za-z0-9_]|$)' 5
+# 裸词用户名：代码里常是文字颜色变量名（ink/inkDim 这类），只汇总提示、不判问题
+if [ -n "$CUR_USER" ]; then
+  scan_pattern_warn_summary "裸词 ${CUR_USER}（多半是代码变量名，仅提示）" "(^|[^A-Za-z0-9_])${CUR_USER}([^A-Za-z0-9_]|$)" 5
+fi
 
 # ---------- 4. 疑似密钥 / token ----------
 head1 "4. 疑似密钥 / token（只报位置，内容打码）"
@@ -300,10 +307,49 @@ fi
 
 # ---------- 6. 签名与体积 ----------
 head1 "6. 签名与体积"
-if codesign --verify "$TARGET" >/dev/null 2>&1; then
-  ok "codesign 校验通过（$(codesign -dv "$TARGET" 2>&1 | grep -m1 'Signature=' | cut -d= -f2)）"
-else
-  warn "codesign 校验未通过（可能还能本机运行；正式交付前建议重签）"
+# 签名口径（老板 2026-11-01 定）：本机自签证书 "Maizi Local Code Signing"，不用 ad-hoc。
+# 先 --deep --strict 校验 + 验身份/flags；若 in-place 失败只因 iCloud/FinderInfo 扩展属性
+# （工作区在 ~/Documents 同步目录，同步服务会重注入 xattr），自动复制到 /tmp 清 xattr 后复验，
+# 不误判为签名坏了（也不降低检查强度：真正签名无效时同样报不出来）。
+SIGN_ID_WANT="${SIGN_ID_WANT:-Maizi Local Code Signing}"
+
+check_signature() {
+  local APP="$1" AUTH FLAGS FOK=0
+  if ! codesign --verify --deep --strict "$APP" >/dev/null 2>&1; then
+    return 1
+  fi
+  AUTH="$(codesign -dv --verbose=4 "$APP" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
+  FLAGS="$(codesign -dv --verbose=4 "$APP" 2>&1 | grep -o 'flags=0x[0-9a-fA-F]*([^)]*)' | head -1)"
+  FLAGS="${FLAGS#flags=}"
+  ok "codesign --verify --deep --strict 通过（Authority=${AUTH:-未记录}，flags=${FLAGS:-?}）"
+  case "${FLAGS:-}" in 0x0*) FOK=1 ;; esac
+  if [ "$AUTH" = "$SIGN_ID_WANT" ] && [ "$FOK" -eq 1 ]; then
+    ok "签名身份合规：本机自签证书 ${SIGN_ID_WANT} + flags=0x0（非 ad-hoc）"
+  else
+    bad "签名身份不合规：Authority=${AUTH:-?}、flags=${FLAGS:-?}（老板 2026-11-01 规矩：打包一律本机自签证书、flags=0x0，禁 ad-hoc）"
+  fi
+  return 0
+}
+
+if ! check_signature "$TARGET"; then
+  VF_ERR="$(codesign --verify --deep --strict "$TARGET" 2>&1 | head -3)"
+  if printf '%s' "$VF_ERR" | grep -q 'detritus\|FinderInfo'; then
+    warn "in-place 复验未通过：命中 iCloud/FinderInfo 扩展属性（工作区在 ~/Documents 同步目录）→ 复制到 /tmp 清 xattr 后复验"
+    TMPCHK="${TMPDIR:-/tmp}/pbp-verify-$$"
+    if ditto "$TARGET" "$TMPCHK/$(basename "$TARGET")" 2>/dev/null; then
+      xattr -cr "$TMPCHK/$(basename "$TARGET")" 2>/dev/null || true
+      if check_signature "$TMPCHK/$(basename "$TARGET")"; then
+        ok "结论：签名有效（in-place 失败仅因 iCloud FinderInfo 干扰；复制 /tmp 后 --verify --deep --strict 通过）"
+      else
+        warn "复制到 /tmp 后复验仍未通过（请人工检查签名）"
+      fi
+    else
+      warn "无法复制到 /tmp 复验（签名状态待人工确认）"
+    fi
+    rm -rf "$TMPCHK"
+  else
+    warn "codesign --verify --deep --strict 未通过（可能还能本机运行；正式交付前建议重签）"
+  fi
 fi
 SIZE_B="$(du -sk "$TARGET" | awk '{print $1 * 1024}')"
 log "  · 体积：${SIZE_H}（$SIZE_B 字节）"

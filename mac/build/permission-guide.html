@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>饭桶余额 · 首次权限引导</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f6f7; --card: #ffffff; --ink: #1b1b1f; --dim: #5d5d66;
+    --line: #d9d9de; --accent: #2f7d5c; --accent-ink: #ffffff;
+    --must-bg: #fdecea; --must-ink: #b3261e; --opt-bg: #fff6e5; --opt-ink: #8a6100;
+    --code-bg: #f0f0f2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121214; --card: #1a1a1e; --ink: #eaeaec; --dim: #a4a4ad;
+      --line: #303038; --accent: #76ca9f; --accent-ink: #0d2418;
+      --must-bg: rgba(226,126,112,.15); --must-ink: #f09084; --opt-bg: rgba(196,163,114,.14); --opt-ink: #d9b980;
+      --code-bg: #111114;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 18px 60px; background: var(--bg); color: var(--ink);
+    font-family: "PingFang SC", "Hiragino Sans GB", "Heiti SC", "Microsoft YaHei", sans-serif;
+    font-size: 16px; line-height: 1.7; -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 24px; margin: 0 0 6px; letter-spacing: .5px; }
+  .sub { color: var(--dim); font-size: 14.5px; margin: 0 0 24px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px 22px; margin: 0 0 18px;
+  }
+  .card h2 { font-size: 18px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .tag { font-size: 12.5px; font-weight: 600; border-radius: 999px; padding: 2px 10px; }
+  .must { background: var(--must-bg); color: var(--must-ink); }
+  .opt { background: var(--opt-bg); color: var(--opt-ink); }
+  .card p { margin: 8px 0; color: var(--ink); }
+  .card p.dim { color: var(--dim); font-size: 14.5px; }
+  ol { margin: 10px 0 12px; padding-left: 22px; }
+  ol li { margin: 6px 0; }
+  .btns { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 6px; }
+  .btn {
+    display: inline-block; text-decoration: none; font-size: 15px; font-weight: 600;
+    padding: 9px 16px; border-radius: 9px; border: 1px solid var(--line);
+    color: var(--ink); background: transparent; cursor: pointer;
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn:hover { filter: brightness(1.05); }
+  code, .cmd {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px;
+    background: var(--code-bg); border-radius: 6px; padding: 2px 6px;
+  }
+  .cmd { display: block; padding: 10px 12px; margin: 8px 0; user-select: text; word-break: break-all; }
+  .note {
+    border-left: 4px solid var(--accent); background: var(--card);
+    padding: 12px 16px; border-radius: 8px; margin: 18px 0; font-size: 15px;
+  }
+  .warnbox {
+    border: 1px solid var(--must-ink); background: var(--must-bg); color: var(--ink);
+    padding: 14px 16px; border-radius: 10px; margin: 20px 0; font-size: 15px;
+  }
+  .warnbox b { color: var(--must-ink); }
+  .faq { font-size: 14.5px; color: var(--dim); }
+  .faq b { color: var(--ink); }
+  .foot { color: var(--dim); font-size: 13px; margin-top: 28px; }
+  .steps-num { color: var(--accent); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>饭桶余额 · 首次权限引导</h1>
+  <p class="sub">第一次运行需要开一项系统权限（另一项可选）。这里一步步说清楚，照着点就行。</p>
+
+  <div class="card">
+    <h2>开门见山：只差「屏幕录制」这一项</h2>
+    <p>
+      饭桶余额 = 在 Coopanion 桌宠旁边显示各家余额的小窗口。它要<b>截一下桌宠的画面</b>，
+      算出桌宠的头顶和脚底在哪，饭桶才能贴对位置。
+    </p>
+    <p class="dim">
+      macOS 规定：任何程序想看别的窗口画面，都必须由用户亲自在「系统设置 → 隐私与安全性 → 屏幕录制」里
+      把程序勾上。程序自己不能点、也不能绕过。
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>1. 屏幕录制 <span class="tag must">必须</span></h2>
+    <p>用来截 Coopanion 桌宠窗口、算位置。<b>只截桌宠自己的窗口，不录屏、不上传、不存图片</b>。</p>
+    <ol>
+      <li>点下面按钮 → 会跳到「系统设置 → 隐私与安全性 → 屏幕录制」。</li>
+      <li>在列表里找到 <b>饭桶余额</b>，把右边的开关打开（或在列表里点一下它）。</li>
+      <li>系统可能弹一个「要退出并重新打开」的提示 → 点「退出并重新打开」；没弹的话，稍后手动退出程序再打开一次。</li>
+    </ol>
+    <div class="btns">
+      <a class="btn primary" href="x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture">打开「屏幕录制」设置</a>
+    </div>
+    <p class="dim">按钮点不动？把下面这行复制到「终端」里回车，效果一样：</p>
+    <span class="cmd">open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"</span>
+    <p class="dim">
+      列表里找不到「饭桶余额」：先把程序打开一次（它会出现），或者点列表下方的 <b>+</b>，
+      到「个人文件夹 → 应用程序」里选「饭桶余额.app」加进来。
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>2. 辅助功能 <span class="tag opt">可选 · 本版不用</span></h2>
+    <p>
+      这一项本来是给「把桌宠抬高一点」用的。但 Mac 实测：从外部挪 Coopanion 的窗口会被系统立刻弹回原位，
+      所以<b>当前版本不做抬升，这项可以先不授权，完全不影响饭桶显示</b>。
+    </p>
+    <p class="dim">哪天后续版本支持抬升了，再回来开也不迟。</p>
+    <div class="btns">
+      <a class="btn" href="x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility">打开「辅助功能」设置（可选）</a>
+    </div>
+    <span class="cmd">open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"</span>
+  </div>
+
+  <div class="card">
+    <h2>允许之后：重启一下程序</h2>
+    <p>macOS 对「屏幕录制」有硬规定：<b>改完必须重启程序才生效</b>。两种做法任选：</p>
+    <ol>
+      <li><b>菜单栏图标</b>：屏幕右上角菜单栏里找到饭桶余额的小盆图标 → 点它 → 「退出」，然后重新打开程序。</li>
+      <li><b>权限引导窗</b>：程序自己弹的引导窗里点「重新检测」，它会自己判断有没有开好。</li>
+    </ol>
+    <p class="dim">程序重新打开后，屏幕中间不再弹引导窗、菜单栏出现小盆图标，就说明成功了。</p>
+  </div>
+
+  <div class="warnbox">
+    <b>这步必须老板亲自点。</b><br>
+    程序、脚本、助手<i>都不会</i>替你点「允许」，也不会绕过系统弹窗——这是 macOS 的安全底线，
+    也是我们的规矩。看到系统弹窗时，请你自己点「允许」；拿不准就停下来问。
+  </div>
+
+  <div class="card faq">
+    <h2>常见问题</h2>
+    <p><b>Q：授权了，菜单栏也有图标，但小窗没出来？</b><br>
+      先看「屏幕录制」列表里勾的是不是「饭桶余额」；再确认 Coopanion 正在运行、桌宠在屏幕上。
+      还不行就把程序退出重开一次。</p>
+    <p><b>Q：以前授权过，换新版本后又要授权？</b><br>
+      本机是自签名（没有 Apple 公证），每次重新打包签名会变，系统会当成「新程序」重新问一次。
+      这是预期行为，不是程序在乱要权限。</p>
+    <p><b>Q：不想给屏幕录制，行不行？</b><br>
+      不行——看不到桌宠就贴不准位置。真要彻底停用，直接卸载（见安装说明）。</p>
+    <p><b>Q：怎么撤销授权？</b><br>
+      「系统设置 → 隐私与安全性 → 屏幕录制」里把「饭桶余额」开关关掉，或点减号删掉即可。</p>
+    <p style="margin-top:18px">更详细的文字版：同目录的 <b>PERMISSIONS.md</b>。</p>
+  </div>
+
+  <p class="foot">
+    说明：本页可以直接双击在浏览器里打开，也可以从程序自己的「权限引导」窗口看到同样内容。<br>
+    两个设置页的跳转链接（macOS 系统深链）：<br>
+    <code>x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture</code><br>
+    <code>x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility</code>
+  </p>
+
+</div>
+</body>
+</html>

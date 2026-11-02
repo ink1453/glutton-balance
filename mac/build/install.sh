@@ -1,5 +1,5 @@
 #!/bin/bash
-# 安装「饭桶余额」：复制 app 到 ~/Applications + 写登录自启 LaunchAgent 并立刻启动
+# 安装「饭桶余额」：复制 app 到 ~/Applications + 写登录自启 LaunchAgent（launchd 直启 App）并立刻启动
 #
 # 用法：
 #   ./install.sh                    # 正常安装（复制 + 设登录自启 + 立刻启动）
@@ -8,16 +8,19 @@
 #   ./install.sh --dry-run          # 干跑：只打印计划，不复制/不写 plist/不启动
 #   ./install.sh --app=<别的.app>   # 指定源 .app（默认 build/dist/饭桶余额.app）
 #
-# 设计：
-#   · 幂等：重复跑会先停旧实例、覆盖旧文件、替换旧 plist，不重复追加
-#   · 可回滚：uninstall.sh 一键反向（不删用户配置）
-#   · 自启 = ~/Library/LaunchAgents/com.ricebowl.petbalancepanel.plist（RunAtLoad=true）
-#     Mac 上「饭桶余额」自己的屏幕录制授权无法生效（2026-11-01 A1 真机实测：launchd 直启时
-#     权限引导窗 + petprobe 无权限）。改为：ProgramArguments 指向 DSH 主程序（Node 模式），
-#     由守护壳 ~/.dsh/pet-balance-panel/launch-via-dsh.mjs spawn 显示窗 → 继承 DSH 的屏幕录制授权。
-#     守护壳必须常驻（launchd 在载体退出时会杀掉同进程组的显示窗，spawn 完就退会被一起收掉）。
-#     plist 里 ELECTRON_RUN_AS_NODE=1 只给 DSH 载体用；守护壳 spawn 显示窗前会删掉它，显示窗按 GUI 跑。
-#   · 不动系统设置、不代点权限弹窗（权限要老板自己点，见 build/PERMISSIONS.md）
+# 设计（2026-11-01 第 11 轮起 = 「LaunchAgent 直启 App」）：
+#   · App 用本机自签证书 "Maizi Local Code Signing" 签名（build-app.sh 保证，禁 ad-hoc）→
+#     显示窗自己持屏幕录制授权，不再依赖 DeepSeek Harness 当载体（旧方案已下线）。
+#   · 自启 = ~/Library/LaunchAgents/com.maimai.petbalancepanel.plist：
+#       Label=com.maimai.petbalancepanel
+#       ProgramArguments=[~/Applications/饭桶余额.app/Contents/MacOS/Electron, --autostart]
+#       RunAtLoad=true / KeepAlive=true / LimitLoadToSessionType=Aqua
+#       ProcessType=Interactive / ThrottleInterval=10
+#       日志 → ~/Library/Logs/饭桶余额/launch.log / launch.err.log
+#     plist 里绝不写 ELECTRON_RUN_AS_NODE（那是 DSH 会话的 shell 开发变量，用户登录环境没有）。
+#   · 幂等：重复跑会先停旧实例、覆盖旧文件、替换旧 plist，不重复追加。
+#   · 可回滚：uninstall.sh 一键反向（不删用户配置）。
+#   · 不动系统设置、不代点权限弹窗（屏幕录制要老板自己在系统设置给「饭桶余额」点一次，见 build/PERMISSIONS.md）。
 
 set -uo pipefail
 
@@ -26,12 +29,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_SRC="$SCRIPT_DIR/dist/饭桶余额.app"
 APP_NAME="饭桶余额"
 DEST_DIR="$HOME/Applications"
-LABEL="com.ricebowl.petbalancepanel"
+LABEL="com.maimai.petbalancepanel"
+# 旧世代（DSH 载体方案 / 旧 bundle id）的遗留物：安装时顺手清理，避免两套自启打架
+LEGACY_LABEL="com.ricebowl.petbalancepanel"
+LEGACY_PLIST="$HOME/Library/LaunchAgents/${LEGACY_LABEL}.plist"
+LEGACY_WRAPPER="$HOME/.dsh/pet-balance-panel/launch-via-dsh.mjs"
 LOG_DIR="$HOME/Library/Logs/饭桶余额"
-# 自启载体（2026-11-01 A1）：DSH 主程序以 Node 模式跑守护壳，spawn 显示窗继承 DSH 的屏幕录制授权
-DSH_APP="/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness"
-CONFIG_DIR="$HOME/.dsh/pet-balance-panel"
-WRAPPER="$CONFIG_DIR/launch-via-dsh.mjs"
 AUTOSTART=1
 NO_START=0
 DRY=0
@@ -75,11 +78,13 @@ SRC_VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_
 SRC_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_SRC/Contents/Info.plist" 2>/dev/null || echo '?')"
 SRC_SIZE="$(du -sh "$APP_SRC" | awk '{print $1}')"
 ok "源包：${APP_SRC}（${SRC_SIZE}，版本 ${SRC_VER}，标识 ${SRC_ID}）"
+[ "$SRC_ID" = "$LABEL" ] || warn "源包 bundle id 是 ${SRC_ID}，与登录自启 Label（${LABEL}）不一致，请先跑 ./build-app.sh 重打"
 
-if codesign --verify "$APP_SRC" >/dev/null 2>&1; then
-  ok "签名校验通过（ad-hoc）"
+SRC_AUTH="$(codesign -dv --verbose=4 "$APP_SRC" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
+if codesign --verify --deep --strict "$APP_SRC" >/dev/null 2>&1; then
+  ok "签名校验通过（Authority=${SRC_AUTH:-?}）"
 else
-  warn "签名校验未通过：本机可能仍能跑，但建议先跑 ./build-app.sh 重签"
+  warn "签名校验未通过（in-place 可能受 iCloud 扩展属性干扰）；建议先跑 ./build-app.sh 重签"
 fi
 
 # ---- dry-run：只打印计划，绝不改文件 ----
@@ -98,24 +103,20 @@ if [ "$DRY" -eq 1 ]; then
     else
       say "  登录自启：  会新写 plist：$PLIST"
     fi
-    say "              内容：Label=$LABEL / RunAtLoad=true / ProgramArguments=[DSH 主程序(Node 模式), 守护壳 launch-via-dsh.mjs]"
-    say "              载体：DSH 主程序（继承其屏幕录制授权）；守护壳常驻，负责 spawn/收尸显示窗"
-    if [ -f "$WRAPPER" ]; then
-      say "  载体守护壳：会覆盖已有 $WRAPPER"
-    else
-      say "  载体守护壳：会新写 $WRAPPER"
-    fi
+    say "              内容：Label=$LABEL / RunAtLoad=true / KeepAlive=true / LimitLoadToSessionType=Aqua"
+    say "              ProgramArguments=[$BIN, --autostart]（launchd 直启 App，不写 ELECTRON_RUN_AS_NODE）"
     if [ "$NO_START" -eq 1 ]; then
       say "  launchd：   按 --no-start，只写文件不加载（下次登录才起）"
     else
       say "  launchd：   会 launchctl bootout（若有旧任务）→ bootstrap 并立刻启动"
     fi
   else
-    say "  登录自启：  按 --no-autostart，不写 plist（若已有旧 plist / DSH 载体守护壳会被删掉）"
+    say "  登录自启：  按 --no-autostart，不写 plist（若已有旧 plist 会被删掉）"
   fi
   say "  日志目录：  ${LOG_DIR}（将创建）"
-  say "  运行实例：  $( pgrep -f "$DEST/Contents/MacOS/Electron" >/dev/null 2>&1 && echo '有旧实例，会先温和退出/兜底结束' || echo '无旧实例' )"
-  say "  系统权限：  不碰（屏幕录制授权由 DSH 载体继承；本机实测「饭桶余额」自身授权无法生效）"
+  say "  遗留清理：  $( [ -f "$LEGACY_WRAPPER" ] && echo "会删旧版 DSH 载体守护壳 $LEGACY_WRAPPER" || echo '无旧 DSH 载体守护壳' )；$( [ -f "$LEGACY_PLIST" ] && echo "会删旧 bundle id plist" || echo '无旧 bundle id plist' )"
+  say "  运行实例：  $( pgrep -f "$BIN" >/dev/null 2>&1 && echo '有旧实例，会先温和退出/兜底结束' || echo '无旧实例' )"
+  say "  系统权限：  不碰（屏幕录制要老板自己在「系统设置 → 隐私与安全性」给「饭桶余额」点一次允许）"
   say ""
   say "  （dry-run 结束：以上都没实际执行）"
   exit 0
@@ -129,21 +130,16 @@ if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
 else
   ok "旧自启任务不存在（正常，首次安装就是这样）"
 fi
+if launchctl print "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1; then
+  launchctl bootout "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1 || true
+  ok "已卸载旧 bundle id 的自启任务（${LEGACY_LABEL}）"
+fi
 
-# DSH 载体会随 bootout 收到 SIGTERM，守护壳会顺手把显示窗收掉；等它退，残留则按守护壳路径精确结束
-i=0
-while [ "$i" -lt 10 ] && pgrep -f "$WRAPPER" >/dev/null 2>&1; do
-  sleep 0.2
-  i=$((i + 1))
-done
-if pgrep -f "$WRAPPER" >/dev/null 2>&1; then
-  warn "DSH 载体还在跑，按守护壳路径先 SIGTERM 收掉"
-  pkill -f "$WRAPPER" >/dev/null 2>&1 || true
+# 旧世代 DSH 载体守护壳（若还在跑）：先收掉，避免它再拉起旧显示窗
+if pgrep -f "$LEGACY_WRAPPER" >/dev/null 2>&1; then
+  pkill -f "$LEGACY_WRAPPER" >/dev/null 2>&1 || true
   sleep 0.5
-  if pgrep -f "$WRAPPER" >/dev/null 2>&1; then
-    pkill -9 -f "$WRAPPER" >/dev/null 2>&1 || true
-    sleep 0.3
-  fi
+  ok "已结束旧版 DSH 载体守护壳进程"
 fi
 
 # 用主程序自己的 --quit（单实例锁）温和退出；不行再按路径精确结束
@@ -178,8 +174,8 @@ ok "已安装：$DEST"
 
 [ -x "$DEST/Contents/MacOS/Electron" ] || die "安装后缺可执行文件，复制可能不完整"
 plutil -lint "$DEST/Contents/Info.plist" >/dev/null 2>&1 || warn "安装后 Info.plist 校验异常"
-if codesign --verify "$DEST" >/dev/null 2>&1; then
-  ok "安装后签名校验通过"
+if codesign --verify --deep --strict "$DEST" >/dev/null 2>&1; then
+  ok "安装后签名校验通过（--verify --deep --strict）"
 else
   warn "安装后签名校验未通过（本机通常仍能跑；正式分发需要签名+公证）"
 fi
@@ -187,68 +183,34 @@ fi
 # 日志目录（launchd 的 stdout/stderr 落这里；主程序自己的 panel.log 在 ~/.dsh/pet-balance-panel/）
 mkdir -p "$LOG_DIR"
 
-# ---- 3. 登录自启（LaunchAgent）----
+# ---- 3. 登录自启（LaunchAgent 直启 App）----
 step "3/5 登录自启"
 if [ "$AUTOSTART" -eq 0 ]; then
   ok "--no-autostart：只装 app，不写自启（下次登录不会自动起）"
-  # 若之前装过自启，这次按用户意图清掉（含 DSH 载体守护壳，避免留半套自启）
+  # 若之前装过自启，这次按用户意图清掉（含旧世代遗留物，避免留半套自启）
   if [ -f "$PLIST" ]; then
     rm -f "$PLIST"
     ok "已删除旧自启 plist（${PLIST}）"
   fi
-  if [ -f "$WRAPPER" ]; then
-    rm -f "$WRAPPER"
-    ok "已删除 DSH 载体守护壳（${WRAPPER}）"
+  if [ -f "$LEGACY_WRAPPER" ]; then
+    rm -f "$LEGACY_WRAPPER"
+    ok "已删除旧版 DSH 载体守护壳（${LEGACY_WRAPPER}）"
+  fi
+  if [ -f "$LEGACY_PLIST" ]; then
+    rm -f "$LEGACY_PLIST"
+    ok "已删除旧 bundle id plist（${LEGACY_PLIST}）"
   fi
 else
   mkdir -p "$(dirname "$PLIST")"
-  # 2026-11-01 A1：Mac 屏幕录制授权给不到「饭桶余额」自己（真机实测），改由 DSH 主程序当载体拉起。
-  # 先写/更新「DSH 载体守护壳」（登录自启时由 DSH 主程序以 Node 模式执行）。
-  [ -x "$DSH_APP" ] || die "找不到 DSH 主程序：$DSH_APP —— 本机自启依赖它继承屏幕录制授权（老板 2026-11-01 定的方案）"
-  mkdir -p "$CONFIG_DIR"
-  cat > "$WRAPPER" <<'WRAPPER_EOF'
-// 饭桶余额显示窗 · 登录自启守护壳（2026-11-01 第2轮 A1）
-// 由 LaunchAgent com.ricebowl.petbalancepanel 用「DeepSeek Harness」主程序以 Node 模式启动。
-// 为什么这样：Mac 屏幕录制授权只认「饭桶余额」自己的签名，而本机该授权无法授予本应用；
-// 用 DSH 主程序当载体，被拉起的显示窗进程继承 DSH 的屏幕录制授权（本机实测有效）。
-// 作用：spawn 显示窗并常驻守护（launchd 在载体退出时会杀整个进程组，所以不能 spawn 完就退）。
-import { spawn } from 'node:child_process';
-
-const APP = '__PBP_APP_BIN__';
-const stamp = () => new Date().toISOString();
-const log = (s) => console.log(`${stamp()} [launch-via-dsh] ${s}`);
-
-const env = { ...process.env };
-delete env.ELECTRON_RUN_AS_NODE;        // 显示窗必须按 GUI 应用跑，不能继承 Node 模式
-delete env.ELECTRON_NO_ATTACH_CONSOLE;
-
-log('spawn panel');
-const child = spawn(APP, ['--autostart'], { env, stdio: 'ignore' });
-
-child.on('error', (e) => {
-  console.error(`${stamp()} [launch-via-dsh] spawn failed: ${e && e.message}`);
-  process.exit(1);
-});
-child.on('exit', (code, sig) => {
-  log(`panel exited code=${code} sig=${sig}`);
-  process.exit(0);
-});
-// bootout / kickstart -k 会先发 SIGTERM：把显示窗一起收掉，避免孤儿进程
-process.on('SIGTERM', () => {
-  log('SIGTERM -> stop panel');
-  try { child.kill('SIGTERM'); } catch (e) { /* ignore */ }
-  setTimeout(() => process.exit(0), 1500);
-});
-process.on('SIGINT', () => {
-  try { child.kill('SIGTERM'); } catch (e) { /* ignore */ }
-  setTimeout(() => process.exit(0), 1500);
-});
-WRAPPER_EOF
-  # 显示窗路径不写死本机绝对路径：heredoc 里留占位符，再用 $DEST 派生的 $BIN 回填
-  sed -i '' "s|__PBP_APP_BIN__|${BIN}|g" "$WRAPPER" || die "写自启守护壳失败：回填显示窗路径"
-  grep -q '__PBP_APP_BIN__' "$WRAPPER" && die "自启守护壳仍留有未替换的占位符"
-  chmod 644 "$WRAPPER"
-  ok "已写自启守护壳：$WRAPPER"
+  # 旧世代遗留：DSH 载体守护壳（2026-11-01 第 11 轮起已下线，直启 App 不再需要）
+  if [ -f "$LEGACY_WRAPPER" ]; then
+    rm -f "$LEGACY_WRAPPER"
+    ok "已清理旧版 DSH 载体守护壳：$LEGACY_WRAPPER（新方案直启 App，不再需要）"
+  fi
+  if [ -f "$LEGACY_PLIST" ]; then
+    rm -f "$LEGACY_PLIST"
+    ok "已清理旧 bundle id plist：$LEGACY_PLIST"
+  fi
 
   TMP_PLIST="$(mktemp /tmp/pbp-launchagent.XXXXXX.plist)"
   cat > "$TMP_PLIST" <<PLIST_EOF
@@ -258,30 +220,21 @@ WRAPPER_EOF
 <dict>
   <key>Label</key>
   <string>${LABEL}</string>
-  <!-- 2026-11-01 第2轮 A1：Mac 上「饭桶余额」自己的屏幕录制授权无法生效（实测 launchd 直启时
-       权限引导窗 + petprobe 无权限），改用 DSH 主程序以 Node 模式当载体拉起显示窗，继承 DSH 的屏幕录制授权。
-       守护壳常驻（launchd 在载体退出时会杀掉同进程组的显示窗）。 -->
+  <!-- 2026-11-01 起：launchd 直启证书签名 App（不再用 DSH 载体继承屏幕录制授权）。
+       显示窗自己持有屏幕录制授权；ProgramArguments 绝不写 ELECTRON_RUN_AS_NODE。 -->
   <key>ProgramArguments</key>
   <array>
-    <string>${DSH_APP}</string>
-    <string>--expose-internals</string>
-    <string>${WRAPPER}</string>
+    <string>${BIN}</string>
+    <string>--autostart</string>
   </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>ELECTRON_RUN_AS_NODE</key>
-    <string>1</string>
-  </dict>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <false/>
-  <key>ProcessType</key>
-  <string>Interactive</string>
+  <true/>
   <key>LimitLoadToSessionType</key>
   <string>Aqua</string>
-  <key>WorkingDirectory</key>
-  <string>${CONFIG_DIR}</string>
+  <key>ProcessType</key>
+  <string>Interactive</string>
   <key>StandardOutPath</key>
   <string>${LOG_DIR}/launch.log</string>
   <key>StandardErrorPath</key>
@@ -292,16 +245,23 @@ WRAPPER_EOF
 </plist>
 PLIST_EOF
   plutil -lint "$TMP_PLIST" >/dev/null 2>&1 || { rm -f "$TMP_PLIST"; die "生成的 LaunchAgent plist 不合法"; }
-  # 自检：载体 = DSH 主程序（Node 模式）+ 守护壳存在（ELECTRON_RUN_AS_NODE 只给载体用，不允许指向显示窗本体）
-  if grep -q 'ELECTRON_RUN_AS_NODE' "$TMP_PLIST" && grep -q "$WRAPPER" "$TMP_PLIST" && [ -f "$WRAPPER" ] && ! grep -q '饭桶余额.app/Contents/MacOS/Electron' "$TMP_PLIST"; then
-    ok "自启载体自检通过（DSH 主程序 Node 模式 + 守护壳）"
-  else
+  # 自检：直启 App + 不写 ELECTRON_RUN_AS_NODE + 五个关键项齐全
+  SELF_OK=1
+  grep -qF "$BIN" "$TMP_PLIST" || SELF_OK=0
+  grep -qF -- '--autostart' "$TMP_PLIST" || SELF_OK=0
+  grep -q 'ELECTRON_RUN_AS_NODE' "$TMP_PLIST" && SELF_OK=0
+  grep -qF '<key>KeepAlive</key>' "$TMP_PLIST" || SELF_OK=0
+  grep -qF '<key>RunAtLoad</key>' "$TMP_PLIST" || SELF_OK=0
+  grep -qF '<string>Aqua</string>' "$TMP_PLIST" || SELF_OK=0
+  grep -qF '<string>Interactive</string>' "$TMP_PLIST" || SELF_OK=0
+  grep -qF '<key>ThrottleInterval</key>' "$TMP_PLIST" || SELF_OK=0
+  if [ "$SELF_OK" -ne 1 ]; then
     rm -f "$TMP_PLIST"
-    die "自启 plist 自检失败（应为 DSH 载体 + 守护壳，不能直接指向显示窗本体）"
+    die "自启 plist 自检失败（应为 launchd 直启 App：ProgramArguments=[$BIN, --autostart]，无 ELECTRON_RUN_AS_NODE）"
   fi
   mv -f "$TMP_PLIST" "$PLIST" || die "写入自启 plist 失败：$PLIST"
   chmod 644 "$PLIST"
-  ok "已写登录自启：$PLIST"
+  ok "已写登录自启：$PLIST（launchd 直启 App + KeepAlive=true）"
 
   if [ "$NO_START" -eq 1 ]; then
     ok "--no-start：已配置，但这次不加载启动（下次登录生效）"
@@ -315,6 +275,7 @@ PLIST_EOF
     sleep 1
     if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
       ok "launchd 里已存在任务：$LABEL"
+      launchctl kickstart "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
     fi
   fi
 fi
@@ -331,7 +292,9 @@ if [ "$AUTOSTART" -eq 1 ] && [ "$NO_START" -eq 0 ]; then
     i=$((i + 1))
   done
   if [ -n "$PID" ]; then
-    ok "饭桶余额已在运行（pid ${PID}）"
+    PPID_NUM="$(ps -o ppid= -p "$PID" 2>/dev/null | tr -d ' ')"
+    ok "饭桶余额已在运行（pid ${PID}，PPID=${PPID_NUM:-?}）"
+    [ "${PPID_NUM:-}" = "1" ] && ok "确认由 launchd 直启（PPID=1，不依赖 DeepSeek Harness）" || warn "PPID=${PPID_NUM:-?}（不是 1；若刚 bootstrap 可能还没稳定）"
   else
     warn "还没看到进程；稍等或在图形界面里看菜单栏图标/权限引导窗"
   fi
@@ -350,23 +313,24 @@ say ""
 say "✅ 装好了"
 say "   程序位置：$DEST"
 say "   登录自启：$( [ "$AUTOSTART" -eq 1 ] && echo '已开启' || echo '未开启（--no-autostart）' )"
-say "   自启方式：DSH 主程序当载体（Node 模式）+ 守护壳 launch-via-dsh.mjs（显示窗继承 DSH 的屏幕录制授权）"
+say "   自启方式：launchd 直启 App（com.maimai.petbalancepanel.plist；KeepAlive=true，退出后自动拉起）"
 say "   运行日志：$LOG_DIR/launch.log（launchd 输出）"
 say "            ~/.dsh/pet-balance-panel/panel.log（程序自己的运行日志）"
 say ""
 say "第一次使用（重要）："
-say "   1. 如果是「登录自启」拉起的（DSH 载体方案），屏幕录制授权直接继承 DSH，正常不需要再授权；"
-say "      如果是自己从访达双击打开、程序在屏幕中间弹「权限引导」小窗，才需要按下面点一次。"
-say "   2. 屏幕录制 = 必须（用来找 Coopanion 桌宠的位置）；辅助功能 = 可选（本版不用）。"
-say "   3. 点引导窗里的按钮会跳到「系统设置 → 隐私与安全性」，请老板自己点「允许」，"
-say "      不要替老板点，也不要绕过系统弹窗（详见 build/PERMISSIONS.md）。"
-say "   4. 允许后回引导窗点「重新检测」，或者从菜单栏图标退出再开一次。"
+say "   1. 程序需要「屏幕录制」权限（用来找 Coopanion 桌宠位置）。首次启动会弹权限引导小窗，"
+say "      按引导去「系统设置 → 隐私与安全性 → 屏幕录制」给「饭桶余额」点一次允许（只需一次，"
+say "      以后重新打包/升级不会再问——本机自签证书 + 同一 bundle id，签名身份不变）。"
+say "   2. 辅助功能 = 可选（本版不用）。"
+say "   3. 请老板自己点「允许」，不要替老板点、不要绕过系统弹窗（详见 build/PERMISSIONS.md）。"
+say "   4. 允许后从菜单栏小盆图标退出再开一次（屏幕录制必须重启进程才生效）。"
 say ""
 say "常用命令："
 say "   停止运行：  env -u ELECTRON_RUN_AS_NODE \"$BIN\" --quit"
 say "   看自启状态：launchctl print $DOMAIN/$LABEL"
-say "   重启自启：  launchctl kickstart -k gui/$(id -u)/$LABEL"
+say "   重启自启：  launchctl kickstart -k $DOMAIN/$LABEL"
+say "   一键更新（开发用）：./dev-install.sh（打包+备份+安装+重启+冒烟）"
 say "   卸载：      \"$SCRIPT_DIR/uninstall.sh\""
 say ""
-say "未签名提醒：这个 app 是本机自签（ad-hoc），没有 Apple 公证。"
+say "签名说明：本 app 用本机自签证书 \"Maizi Local Code Signing\" 签名（不是 ad-hoc），没有 Apple 公证。"
 say "  本机构建、本机安装不会拦；如果从别的机器拷来，第一次打开要在「系统设置 → 隐私与安全性」里点「仍要打开」。"

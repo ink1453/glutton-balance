@@ -38,7 +38,7 @@ curl -s -X POST http://127.0.0.1:17788/api/extensions/install \
 
 - 成功返回形如 `{"ok":true,"result":"...","restartRequired":true}`。
 - **不要自动重启 Coopanion**；请告诉用户：「重启 Coopanion 后扩展生效」。
-- 需要固定版本时：`-d '{"name":"pet-balance-world","version":"0.0.3"}'`。
+- 需要固定版本时：`-d '{"name":"pet-balance-world","version":"<目标版本，如 0.0.4>"}'`。
 - 返回错误 / 非 2xx → **停下报告**（附返回内容），并改用 §3 让用户手动安装。
 - 卸载（**仅在用户明确要求时**）：把同一地址换成 `/api/extensions/uninstall`，body `{"name":"pet-balance-world"}`。
 

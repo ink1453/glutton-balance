@@ -1,4 +1,4 @@
-# INSTALL · 饭桶余额 Windows 显示窗（源码包 · v0.0.2）
+# INSTALL · 饭桶余额 Windows 显示窗（源码包 · v0.0.4）
 
 > **两版导航**：本文是 **Windows 版**显示窗的安装步骤；**macOS 版**的安装步骤见 [mac/INSTALL.md](mac/INSTALL.md)（源码在 [mac/](mac/) 目录）。两版各自独立安装，共用同一个 Coopanion 扩展与配置格式。
 
@@ -40,6 +40,7 @@
    - 只装不启动：加 `-NoStart`
 
 5. **在 Coopanion 里配置**：打开「饭桶余额」扩展的设置页 → 填写余额来源（官方余额接口 / new-api 中转站 / 自定义接口，或选「大白饭」演示档）→ 保存。显示窗约 5 秒内自动生效。
+   外观固定为内置三款（白瓷 / 黑陶 / 不锈钢）；旧配置若写过「搪瓷（enamel）」已随 0.0.4 删除，会自动回退白瓷，不影响使用。
 
 ## 3. 配置说明（`config.json`）
 
@@ -83,5 +84,5 @@
 
 ## 8. 版本
 
-- 版本：`0.0.2`（与 macOS 显示窗、Coopanion 扩展、GitHub Release 同号）
+- 版本：`0.0.4`（开发中，尚未正式发布；与 macOS 显示窗、Coopanion 扩展、GitHub Release 同号）
 - 详细更新日志见 Coopanion 扩展市场「饭桶余额」条目与扩展包内 `CHANGELOG.md`。

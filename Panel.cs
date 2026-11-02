@@ -2588,7 +2588,7 @@ namespace PetBalancePanel
     internal sealed class DisplayConfig
     {
         public string Style = "ricebowl";       // ricebowl | capsule（回退）
-        public string BowlStyle = "porcelain";  // porcelain 白瓷圈足碗（默认）| black 深色宽沿浅盆 | steel 不锈钢 | enamel 搪瓷 | custom:<名字>
+        public string BowlStyle = "porcelain";  // porcelain 白瓷圈足碗（默认）| black 深色宽沿浅盆 | steel 不锈钢 | custom:<名字>（0.0.4：删除 enamel 搪瓷外观，旧值自动回退 porcelain）
         public string LabelStyle = "L3";        // L1 盆沿小字 | L2 饭票小旗 | L3 盆沿木牌（默认）
         public string Wear = "head";            // v4：head 头顶（默认）| feet 脚下（头顶强制无轮子）
         public string NineLayout = "pyramid";   // v4.1：pyramid 金字塔（默认，9 家底 4/中 3/顶 2）| row 一排 | twoRows 两排（前 5 后 4）
@@ -2752,7 +2752,8 @@ namespace PetBalancePanel
                 string bs = Json.GetString(disp, "bowlStyle", "porcelain");
                 bs = (bs ?? "").Trim();
                 string bsLow = bs.ToLowerInvariant();
-                if (bsLow == "black" || bsLow == "porcelain" || bsLow == "steel" || bsLow == "enamel") cfg.Display.BowlStyle = bsLow;
+                if (bsLow == "black" || bsLow == "porcelain" || bsLow == "steel") cfg.Display.BowlStyle = bsLow;
+                else if (bsLow == "enamel") cfg.Display.BowlStyle = "porcelain";   // 0.0.4：搪瓷外观已删除，旧配置显式回退白瓷（不回退 black）
                 else if (bsLow.StartsWith("custom:")) cfg.Display.BowlStyle = bs;
                 else cfg.Display.BowlStyle = "porcelain";
                 string ls = Json.GetString(disp, "labelStyle", "L1");

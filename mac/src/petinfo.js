@@ -37,6 +37,7 @@ class PetLocator {
 
   start() {
     if (this.proc) return;
+    this.stopped = false; // 显式 start = 希望它在跑（配置热载改采样间隔时会 stop→start）
     try {
       if (!fs.existsSync(this.binary)) throw new Error('petprobe not found: ' + this.binary);
       this.proc = spawn(this.binary, ['watch', '--interval', String(this.intervalMs)], {
@@ -56,10 +57,13 @@ class PetLocator {
         const s = String(d).trim();
         if (s) logger.write('petprobe stderr ' + s.slice(0, 200));
       });
-      this.proc.on('exit', (code, sig) => {
+      const child = this.proc;
+      child.on('exit', (code, sig) => {
         logger.write(`petprobe exit code=${code} sig=${sig}`);
-        this.proc = null;
-        setTimeout(() => { if (!this.stopped) this.start(); }, 1000); // 崩溃自动重启
+        // 只清理自己这一代进程的引用：热载改采样间隔会 stop→start，旧进程的 exit 事件
+        // 晚到也不能把新进程引用清掉（否则会重复拉起多个 watcher）
+        if (this.proc === child) this.proc = null;
+        setTimeout(() => { if (!this.stopped && !this.proc) this.start(); }, 1000); // 崩溃自动重启
       });
       logger.write('petprobe start interval=' + this.intervalMs);
     } catch (e) {
@@ -70,6 +74,21 @@ class PetLocator {
   stop() {
     this.stopped = true;
     if (this.proc) { try { this.proc.kill('SIGTERM'); } catch (e) { /* ignore */ } this.proc = null; }
+  }
+
+  /**
+   * 运行期改采样间隔（#1 晃晕唤出：抖动判定要用 120~125ms）。
+   * 与当前一致返回 false；变了则重启 watcher 并返回 true（petprobe 下限 120ms）。
+   */
+  setIntervalMs(ms) {
+    const next = Math.max(120, Math.round(Number(ms) || 0) || 250);
+    if (next === this.intervalMs) return false;
+    this.intervalMs = next;
+    if (this.proc || this.stopped) {
+      this.stop();
+      this.start(); // start() 内部复位 stopped
+    }
+    return true;
   }
 
   _onLine(line) {

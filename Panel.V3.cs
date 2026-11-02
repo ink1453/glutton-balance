@@ -116,7 +116,7 @@ namespace PetBalancePanel
             st.Theme = theme;
             st.Light = string.Equals(theme, "light", StringComparison.OrdinalIgnoreCase);
             st.SelectedId = ti == null ? "" : (ti.SelectedId ?? "");
-            st.BowlStyleName = bowlStyle == "enamel" ? "enamel" : (bowlStyle == "ceramic" ? "ceramic" : "steel");
+            st.BowlStyleName = bowlStyle == "ceramic" ? "ceramic" : "steel";                        // 0.0.4：删除 enamel 搪瓷外观
             st.Key = theme + "/" + (fromApi ? "api:" + st.SelectedId : "fallback") + "/" + st.BowlStyleName;
             return st;
         }
@@ -194,12 +194,10 @@ namespace PetBalancePanel
     internal static class BowlMaterials
     {
         private static BowlMaterial s_steel;
-        private static BowlMaterial s_enamel;
         private static BowlMaterial s_ceramic;
 
         public static BowlMaterial Get(string name)
         {
-            if (name == "enamel") return Enamel();
             if (name == "ceramic") return Ceramic();
             return Steel();
         }
@@ -223,26 +221,6 @@ namespace PetBalancePanel
             m.Outline = C(38, 44, 52);
             m.Deco = C(255, 255, 255);
             s_steel = m;
-            return m;
-        }
-
-        public static BowlMaterial Enamel()
-        {
-            if (s_enamel != null) return s_enamel;
-            BowlMaterial m = new BowlMaterial();
-            m.Name = "enamel";
-            m.BodyPositions = new float[] { 0f, 0.30f, 0.62f, 0.85f, 1f };
-            m.BodyColors = new Color[] { C(253,252,248), C(247,246,240), C(234,234,229), C(204,209,212), C(166,174,179) };
-            m.Rim = C(47, 95, 168);
-            m.RimLight = C(138, 176, 228);
-            m.InnerTop = C(30, 42, 66);
-            m.InnerBottom = C(234, 238, 244);
-            m.Rice = C(253, 252, 247);
-            m.RiceShadow = C(216, 214, 201);
-            m.Gloss = C(255, 255, 255);
-            m.Outline = C(24, 46, 88);
-            m.Deco = C(47, 95, 168);
-            s_enamel = m;
             return m;
         }
 
@@ -321,7 +299,7 @@ namespace PetBalancePanel
         private const string DefaultId = "black";
         private static readonly object s_gate = new object();
         private static readonly Dictionary<string, BowlAsset> s_cache = new Dictionary<string, BowlAsset>();
-        private static readonly string[] BuiltinIds = new string[] { "black", "porcelain", "steel", "enamel" };
+        private static readonly string[] BuiltinIds = new string[] { "black", "porcelain", "steel" };   // 0.0.4：删除 enamel 搪瓷外观
 
         public static string NormalizeId(string style)
         {
@@ -329,6 +307,7 @@ namespace PetBalancePanel
             if (raw.Length == 0) return DefaultId;
             if (raw.StartsWith("custom:", StringComparison.OrdinalIgnoreCase)) return raw;
             string low = raw.ToLowerInvariant();
+            if (low == "enamel") return "porcelain";   // 0.0.4：搪瓷外观已删除，历史 id 显式回退白瓷（不回退 black）
             for (int i = 0; i < BuiltinIds.Length; i++) if (BuiltinIds[i] == low) return low;
             return "custom:" + raw;
         }
@@ -1509,7 +1488,7 @@ namespace PetBalancePanel
                             string bs = (cfg.Display.BowlStyle ?? "porcelain").ToLowerInvariant();
                             if (bs == "black") whaleCol = Color.FromArgb(240, 214, 158, 62);        // 暖金
                             else if (bs == "steel") whaleCol = Color.FromArgb(245, 236, 242, 248);  // 白/亮银
-                            else whaleCol = Color.FromArgb(238, 43, 92, 158);                      // 青花蓝（porcelain/enamel）
+                            else whaleCol = Color.FromArgb(238, 43, 92, 158);                      // 青花蓝（porcelain）
                             DrawWhaleLogo(g, cx - lay.BowlW * 0.19f, ny + nh * 0.52f, logoW, scale, whaleCol);
                         }
                         using (StringFormat nf = new StringFormat())

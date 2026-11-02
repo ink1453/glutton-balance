@@ -4,6 +4,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { normalizeShake } = require('./shake');
 
 const MAX_PROVIDERS = 9;
 
@@ -47,7 +48,7 @@ function defaultConfig() {
       logo: false, logoStyle: 'deepseek',
     },
     theme: { follow: true, port: 17788, statePort: 7797, force: '', pollMs: 3000 },
-    interaction: { expandOnClick: false },
+    interaction: { expandOnClick: false, shake: normalizeShake(null) },
     capsule: { width: 200, height: 30, overlap: 6, maxProviders: 9 },
     liveFollow: { detectMs: 250, smooth: true },
     petLift: { enabled: true },
@@ -60,7 +61,8 @@ function normalizeBowlStyle(raw) {
   if (!s) return 'porcelain';
   if (/^custom:/i.test(s)) return s;
   const low = s.toLowerCase();
-  if (['porcelain', 'black', 'steel', 'enamel'].includes(low)) return low;
+  // 第 9 轮：搪瓷（enamel）外观已整套下线（老板 2026-11-01 20:0x）；旧配置 enamel/未知值统一回退白瓷。
+  if (['porcelain', 'black', 'steel'].includes(low)) return low;
   return 'porcelain'; // X 缺失/未知 → porcelain（默认白瓷）
 }
 
@@ -226,7 +228,11 @@ function normalizeConfig(raw) {
   };
 
   const ri = isObj(r.interaction) ? r.interaction : {};
-  cfg.interaction = { expandOnClick: bool(ri.expandOnClick, d.interaction.expandOnClick) };
+  cfg.interaction = {
+    expandOnClick: bool(ri.expandOnClick, d.interaction.expandOnClick),
+    // #1 晃晕唤出：全部字段有默认值，旧配置不写 interaction.shake 也能用（enabled 默认 true）
+    shake: normalizeShake(ri.shake),
+  };
 
   const rc = isObj(r.capsule) ? r.capsule : {};
   cfg.capsule = {
