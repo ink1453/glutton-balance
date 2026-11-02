@@ -864,7 +864,10 @@ function setupIpc() {
     if (guideWin && !guideWin.isDestroyed()) {
       try { guideWin.webContents.send('guide:status', ok ? '已授权，正在启动显示窗…' : '还没检测到授权。请在系统设置里勾选「饭桶余额」，然后回到这里点「重新检测」。'); } catch (e) { /* ignore */ }
     }
-    if (ok) { setTimeout(() => { if (guideWin && !guideWin.isDestroyed()) guideWin.close(); startPanelIfReady(); }, 600); }
+    if (ok) {
+      if (locator && !locator.proc) { logger.write('screen permission granted (guide retry) -> start petprobe'); locator.start(); }
+      setTimeout(() => { if (guideWin && !guideWin.isDestroyed()) guideWin.close(); startPanelIfReady(); }, 600);
+    }
   });
 }
 
@@ -1278,8 +1281,25 @@ function startLoops() {
   const baseDetectMs = Math.max(120, cfg.liveFollow.detectMs || 250);
   const shakeDetectMs = cfg.interaction.shake.enabled ? Math.max(120, cfg.interaction.shake.detectMs || 125) : baseDetectMs;
   locator = new PetLocator({ binary: PETPROBE, intervalMs: Math.min(baseDetectMs, shakeDetectMs) });
-  locator.start();
   applyShakeRuntime('loops-start');
+  // R-49 系统权限身份闸：先用不弹窗的 preflight 判断；没有「录屏与系统录音」授权时
+  // 不启动 petprobe（它会直接退出，不调 SCK、不弹窗），只静默等老板在引导窗授权。
+  if (checkScreenPermission()) {
+    locator.start();
+  } else {
+    logger.write('petprobe deferred: no-screen-permission（静默等待授权，不反复请求）');
+    setTimeout(() => { if (!loopStopped) showGuideWindow('screen-capture-not-granted'); }, 1200);
+  }
+  // 静默复查授权（2s 一次，只读状态、不触发系统弹窗）；授权后自动起 petprobe 并收起引导窗
+  const permWatchTimer = setInterval(() => {
+    if (loopStopped || !locator) { clearInterval(permWatchTimer); return; }
+    if (!locator.proc && checkScreenPermission()) {
+      logger.write('screen permission granted -> start petprobe');
+      locator.start();
+      if (guideWin && !guideWin.isDestroyed()) guideWin.close();
+      startPanelIfReady();
+    }
+  }, 2000);
 
   // 主题轮询（按 pollMs 链式）
   const themeLoop = async () => {

@@ -38,6 +38,7 @@ class PetLocator {
   start() {
     if (this.proc) return;
     this.stopped = false; // 显式 start = 希望它在跑（配置热载改采样间隔时会 stop→start）
+    this.permDenied = false; // R-49：每次显式启动重置权限标记，由首条采样重新判定
     try {
       if (!fs.existsSync(this.binary)) throw new Error('petprobe not found: ' + this.binary);
       this.proc = spawn(this.binary, ['watch', '--interval', String(this.intervalMs)], {
@@ -63,7 +64,13 @@ class PetLocator {
         // 只清理自己这一代进程的引用：热载改采样间隔会 stop→start，旧进程的 exit 事件
         // 晚到也不能把新进程引用清掉（否则会重复拉起多个 watcher）
         if (this.proc === child) this.proc = null;
-        setTimeout(() => { if (!this.stopped && !this.proc) this.start(); }, 1000); // 崩溃自动重启
+        // R-49：无屏幕录制权限时 petprobe 会直接退出（只做 CGPreflight，不调 SCK、不弹窗）。
+        // 此时不做秒级自动重启，避免后台反复请求系统权限；由 App 静默轮询到授权后再显式 start。
+        setTimeout(() => {
+          if (this.stopped || this.proc) return;
+          if (this.permDenied) { logger.write('petprobe auto-restart skipped (no-screen-permission, 等授权后再起)'); return; }
+          this.start();
+        }, 1000);
       });
       logger.write('petprobe start interval=' + this.intervalMs);
     } catch (e) {

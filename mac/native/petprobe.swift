@@ -317,6 +317,8 @@ final class Capturer {
     var ctx = CaptureCtx()
 
     func capture(wid: Int) async -> (CGImage?, PetWin?, String) {
+        // R-49：先用不弹窗的 CGPreflight 判断；无授权直接返回，绝不调用 SCK（避免后台反复请求/弹窗）
+        guard CGPreflightScreenCaptureAccess() else { return (nil, findPetWindow(), "no-screen-permission") }
         guard let w = await ctx.matchWindow(wid) else { return (nil, findPetWindow(), "window-not-found") }
         let f = w.frame
         let scale = backingScale(for: f)
@@ -404,6 +406,7 @@ Task {
         sem.signal()
     case "scan":
         let savePath = argValue("--save", "")
+        guard CGPreflightScreenCaptureAccess() else { emit(["ok": "false", "reason": jstr("no-screen-permission"), "preflight": "false"]); sem.signal(); return }
         guard let pw0 = findPetWindow() else { emit(["ok": "false", "reason": jstr("no-pet-window")]); sem.signal(); return }
         let t0 = Date()
         let (img, pw, err) = await capturer.capture(wid: pw0.wid)
@@ -438,6 +441,11 @@ Task {
         emitScan(r, pw, scale)
         sem.signal()
     case "watch":
+        // R-49：无授权直接退出（只输出一次 preflight 结果，不调 SCK、不循环请求）
+        guard CGPreflightScreenCaptureAccess() else {
+            emit(["ok": "false", "reason": jstr("no-screen-permission"), "preflight": "false"])
+            sem.signal(); return
+        }
         let interval = Int(argValue("--interval", "250")) ?? 250
         let maxTicks = Int(argValue("--max", "0")) ?? 0
         var tick = 0
