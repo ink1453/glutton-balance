@@ -32,7 +32,8 @@ function fail(msg, extra) {
 
 const env = Object.assign({}, process.env, {
   NODE_PATH: STUB_DIR + (process.env.NODE_PATH ? ':' + process.env.NODE_PATH : ''),
-  PET_BALANCE_PANEL_LOG: LOG, // 不写正式 panel.log
+  GLUTTONBALANCE_PANEL_LOG: LOG, // 不写正式 panel.log
+  GLUTTONBALANCE_PANEL_DIR: path.join(os.tmpdir(), 'pbp-a4-selftest-dir-' + process.pid), // 配置目录也指到临时目录，不碰真实用户目录、不触发旧目录迁移
 });
 delete env.ELECTRON_RUN_AS_NODE; // DSH 会话环境带该变量；纯 node 自测要清掉
 

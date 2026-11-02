@@ -482,7 +482,7 @@ function httpJson(url, timeoutMs, headers) {
     const req = mod.request({
       protocol: u.protocol, hostname: u.hostname, port: u.port || (u.protocol === 'https:' ? 443 : 80),
       path: u.pathname + (u.search || ''), method: 'GET',
-      headers: Object.assign({ 'User-Agent': 'PetBalancePanel/1.0 (Mac)', 'Accept': 'application/json', 'Connection': 'close' }, headers || {}),
+      headers: Object.assign({ 'User-Agent': 'GluttonBalance/1.0 (Mac)', 'Accept': 'application/json', 'Connection': 'close' }, headers || {}),
       timeout: timeoutMs || 1500,
     }, (res) => {
       const chunks = [];
@@ -1667,6 +1667,11 @@ if (!gotLock) {
     try { if (process.platform === 'darwin' && app.dock) app.dock.hide(); } catch (e) { /* ignore */ }
     logger.init();
     logger.write(`start ${APP_NAME} v${APP_VERSION} electron=${process.versions.electron} platform=${process.platform} ${process.arch}`);
+    // 改名兼容（2026-11-02）：首次启动把旧配置目录的数据迁到新目录（旧目录保留、幂等、不覆盖新文件）。
+    try {
+      const mig = configMod.migrateLegacyUserData();
+      if (mig.migrated) logger.write(`config migrated from legacy dir -> ${mig.to} files=${mig.copied.length}（旧目录原样保留；兼容回退）`);
+    } catch (e) { logger.write('WARN config migrate failed ' + String(e && e.message || e)); }
     setupIpc();
     loadConfig();
     installThemeWatch();

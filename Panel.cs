@@ -17,7 +17,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-namespace PetBalancePanel
+namespace GluttonBalance
 {
     internal static class Program
     {
@@ -112,11 +112,81 @@ namespace PetBalancePanel
             return 1;
         }
 
+        // ---------------- 改名兼容（2026-11-02）：旧配置目录 → 新配置目录一次性迁移 ----------------
+        // 规则：程序目录下没有 config.json 且旧目录有 → 复制 config.json、bowls/、rice/；
+        // 旧目录原样保留；幂等、不覆盖新目录已有文件；日志一行说明。
+        internal static string UserDataDir()
+        {
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return Path.Combine(Path.Combine(home, ".dsh"), "glutton-balance");
+        }
+
+        internal static string LegacyUserDataDir()
+        {
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            return Path.Combine(Path.Combine(home, ".dsh"), "pet-balance-panel");
+        }
+
+        private static void MigrateLegacyUserData(string baseDir)
+        {
+            try
+            {
+                string legacyDir = LegacyUserDataDir();
+                string userDir = UserDataDir();
+                string legacyCfg = Path.Combine(legacyDir, "config.json");
+                string targetCfg = Path.Combine(baseDir, "config.json");
+                bool migrated = false;
+                if (!File.Exists(targetCfg) && File.Exists(legacyCfg))
+                {
+                    Directory.CreateDirectory(baseDir);
+                    File.Copy(legacyCfg, targetCfg, false);
+                    migrated = true;
+                }
+                string legacyBowls = Path.Combine(legacyDir, "bowls");
+                if (Directory.Exists(legacyBowls))
+                {
+                    migrated |= CopyDirMissing(legacyBowls, Path.Combine(userDir, "bowls"));
+                }
+                string legacyRice = Path.Combine(legacyDir, "rice");
+                if (Directory.Exists(legacyRice))
+                {
+                    migrated |= CopyDirMissing(legacyRice, Path.Combine(userDir, "rice"));
+                }
+                if (migrated)
+                {
+                    Log.Write("config migrated from legacy dir: " + legacyDir + " -> " + userDir + " (old dir kept)");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("WARN legacy config migrate failed: " + SafeText(ex.Message));
+            }
+        }
+
+        private static bool CopyDirMissing(string src, string dst)
+        {
+            bool copied = false;
+            try { Directory.CreateDirectory(dst); } catch { return false; }
+            foreach (string file in Directory.GetFiles(src))
+            {
+                string target = Path.Combine(dst, Path.GetFileName(file));
+                if (File.Exists(target)) continue;
+                try { File.Copy(file, target, false); copied = true; }
+                catch { }
+            }
+            foreach (string dir in Directory.GetDirectories(src))
+            {
+                copied |= CopyDirMissing(dir, Path.Combine(dst, Path.GetFileName(dir)));
+            }
+            return copied;
+        }
+
         private static int Run(int demoCount)
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
             baseDir = baseDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             Log.Init(Path.Combine(baseDir, "panel.log"));
+            MigrateLegacyUserData(baseDir);
             NativeV3.TryEnablePerMonitorV2();
             App = new AppContext(baseDir);
             App.DemoCount = Math.Max(0, Math.Min(12, demoCount));
@@ -142,14 +212,14 @@ namespace PetBalancePanel
                 return 2;
             }
             IntPtr hwnd = Native.CreateWindowEx(
-                0, AppContext.WindowClass, "PetBalancePanel", Native.WS_POPUP,
+                0, AppContext.WindowClass, "GluttonBalance", Native.WS_POPUP,
                 0, 0, 448, 46, IntPtr.Zero, IntPtr.Zero, hInstance, IntPtr.Zero);
             if (hwnd == IntPtr.Zero)
             {
                 Log.Write("ERROR CreateWindowEx failed err=" + Marshal.GetLastWin32Error());
                 return 3;
             }
-            Native.SetWindowText(hwnd, "PetBalancePanel");
+            Native.SetWindowText(hwnd, "GluttonBalance");
             int titleLen = Native.GetWindowTextLength(hwnd);
             StringBuilder titleBuf = new StringBuilder(128);
             Native.GetWindowText(hwnd, titleBuf, titleBuf.Capacity);
@@ -286,9 +356,9 @@ namespace PetBalancePanel
 
     internal sealed class AppContext
     {
-        public const string WindowClass = "PetBalancePanelWnd";
-        public const string MutexName = "Local\\PetBalancePanel.SingleInstance";
-        public const string QuitEventName = "Local\\PetBalancePanel.Quit";
+        public const string WindowClass = "GluttonBalanceWnd";
+        public const string MutexName = "Local\\GluttonBalance.SingleInstance";
+        public const string QuitEventName = "Local\\GluttonBalance.Quit";
         public const uint WM_APP_REDRAW = 0x8001;
         public const uint WM_APP_QUIT = 0x8002;
 
@@ -444,7 +514,12 @@ namespace PetBalancePanel
         public AppContext(string rootDir)
         {
             this.rootDir = rootDir;
-            string cfgOverride = Environment.GetEnvironmentVariable("PET_BALANCE_PANEL_CONFIG");
+            string cfgOverride = Environment.GetEnvironmentVariable("GLUTTONBALANCE_PANEL_CONFIG");
+            if (cfgOverride == null || cfgOverride.Trim().Length == 0)
+            {
+                // 改名兼容（2026-11-02）：新变量优先，旧变量保留为回退
+                cfgOverride = Environment.GetEnvironmentVariable("PET_BALANCE_PANEL_CONFIG");
+            }
         this.ConfigPath = (cfgOverride != null && cfgOverride.Trim().Length > 0)
             ? Path.GetFullPath(cfgOverride.Trim())
             : Path.Combine(rootDir, "config.json");
@@ -3378,7 +3453,7 @@ namespace PetBalancePanel
             req.Timeout = timeoutMs;
             req.ReadWriteTimeout = timeoutMs;
             req.KeepAlive = false;
-            req.UserAgent = "PetBalancePanel/1.0";
+            req.UserAgent = "GluttonBalance/1.0";
             req.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
             if (headers != null)
             {

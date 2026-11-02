@@ -1,4 +1,4 @@
-﻿# 编译 panel.exe（WinExe，无控制台黑框）
+﻿# 编译饭桶余额（GluttonBalance）显示窗 panel.exe（WinExe，无控制台黑框）
 # 依赖：Windows 自带的 .NET Framework 4.8 csc.exe，不需要装任何东西。
 # 用法：powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 #       -Out panel.v3.exe  编译到别的文件名（面板正在运行时不能覆盖 panel.exe）

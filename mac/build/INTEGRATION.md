@@ -22,15 +22,19 @@
 
 - App 已用**本机自签证书** `Maizi Local Code Signing` 签名（`build-app.sh` 硬校验，禁 ad-hoc）→
   显示窗自己就能持有「屏幕录制」授权，**不再需要 DeepSeek Harness 当载体**（旧 DSH 载体方案已下线）。
-- `~/Library/LaunchAgents/com.maimai.petbalancepanel.plist` 关键内容：
-  - `Label = com.maimai.petbalancepanel`
+- `~/Library/LaunchAgents/com.gluttonbalance.panel.plist` 关键内容：
+  - `Label = com.gluttonbalance.panel`
   - `ProgramArguments = [~/Applications/饭桶余额.app/Contents/MacOS/Electron, --autostart]`（用 `$HOME` 展开成实际用户路径）
   - `RunAtLoad = true`、`KeepAlive = true`（退出后 launchd 自动拉起）、`LimitLoadToSessionType = Aqua`
   - `ProcessType = Interactive`、`ThrottleInterval = 10`
   - `StandardOutPath/StandardErrorPath = ~/Library/Logs/饭桶余额/launch.log / launch.err.log`
   - **没有** `ELECTRON_RUN_AS_NODE`、**没有** DSH 路径、**没有** `launch-via-dsh.mjs` 守护壳。
-- 旧世代遗留（`~/.dsh/pet-balance-panel/launch-via-dsh.mjs`、旧 bundle id `com.ricebowl.*` 的 plist）由
-  `install.sh` / `uninstall.sh` 顺手清理，不会两套自启打架。
+- 旧世代遗留（`~/.dsh/pet-balance-panel/launch-via-dsh.mjs`、旧 bundle id `com.ricebowl.*` 的 plist）
+  由 `install.sh` / `uninstall.sh` 顺手清理，不会两套自启打架；改名前的本机旧 label 不写入源码（R-42 隔离口径）。
+- **改名兼容（2026-11-02）**：配置目录默认 `~/.dsh/glutton-balance`；首次启动若新目录没有 `config.json`
+  且旧目录 `~/.dsh/pet-balance-panel/config.json` 存在，会自动复制 `config.json`、`bowls/`、`rice/` 到新目录
+  （旧目录原样保留、幂等、不覆盖新文件，`panel.log` 记一行迁移说明）；环境变量 `GLUTTONBALANCE_PANEL_*`
+  优先、旧变量 `PET_BALANCE_PANEL_*` 仍兼容。
 - `--autostart` 参数由 launchd 固定传入；主程序解析后暂未使用（见 §3.1 建议）。
 - 日常开发更新走 `build/dev-install.sh`：打包 → 备份旧安装 → ditto 安装 → bootout/bootstrap/kickstart → 冒烟。
 
@@ -61,7 +65,7 @@
 
 ## 5. 打包侧已保证（不用主程序操心）
 
-- Info.plist：`CFBundleName/CFBundleDisplayName=饭桶余额`、`CFBundleIdentifier=com.maimai.petbalancepanel`、
+- Info.plist：`CFBundleName/CFBundleDisplayName=饭桶余额`、`CFBundleIdentifier=com.gluttonbalance.panel`、
   `CFBundleShortVersionString=0.0.4`、`CFBundleVersion=1`、`CFBundleIconFile=app.icns`、`LSUIElement=true`、
   `NSHighResolutionCapable=true`、`LSMinimumSystemVersion=14.0`、`CFBundleExecutable=Electron`。
 - 应用图标：`Contents/Resources/app.icns` = `build/icon/app.icns`（白瓷饭桶 1024 → 10 尺寸）。
@@ -69,7 +73,7 @@
 - 进包源码：`main.js`、`preload.js`、`permission.html`、`package.json`（去 dev 字段/scripts）、`src/`、`renderer/`、`assets/`、`native/`；
   **不带** `test/`、`build/`、`tools/`、`docs/`、`.DS_Store`、`node_modules`。
 - 签名：本机自签证书 `Maizi Local Code Signing`——先单独签 `native/petprobe`，再 `codesign --force --deep --sign "Maizi Local Code Signing"` 签 App 本体；硬校验 `--verify --deep --strict` + `Authority` + `flags=0x0`（不用 ad-hoc）。
-- 安装：`~/Applications/饭桶余额.app` + `~/Library/LaunchAgents/com.maimai.petbalancepanel.plist`（RunAtLoad、KeepAlive、Aqua 会话）。
+- 安装：`~/Applications/饭桶余额.app` + `~/Library/LaunchAgents/com.gluttonbalance.panel.plist`（RunAtLoad、KeepAlive、Aqua 会话）。
 
 ## 6. 验收清单（打包侧按这个跑）
 
@@ -80,9 +84,9 @@ cd app-mac/build
 ./scan-package.sh                   # 退出码 0；报告 dist/package-scan.txt
 ./dev-install.sh --dry-run          # 干跑：看会打包/备份/安装/重启什么，不改机器
 ./dev-install.sh                    # 一键闭环：打包 + 备份 + 安装 + kickstart + 冒烟
-launchctl print gui/$(id -u)/com.maimai.petbalancepanel   # 自启任务在（直启 App）
+launchctl print gui/$(id -u)/com.gluttonbalance.panel   # 自启任务在（直启 App）
 ps aux | grep "饭桶余额.app/Contents/MacOS/Electron"        # 进程在
-tail -n 20 ~/.dsh/pet-balance-panel/panel.log               # 启动日志正常（start ... v0.0.4 / place src=...）
+tail -n 20 ~/.dsh/glutton-balance/panel.log               # 启动日志正常（start ... v0.0.4 / place src=...）
 # 出图证据（不需要屏幕录制权限）：
 env -u ELECTRON_RUN_AS_NODE \
   "$HOME/Applications/饭桶余额.app/Contents/MacOS/Electron" \
@@ -107,10 +111,11 @@ env -u ELECTRON_RUN_AS_NODE \
 
 | 用途 | 路径 |
 |---|---|
-| 用户配置（只读） | `~/.dsh/pet-balance-panel/config.json` |
-| 程序日志（256 KB 轮转） | `~/.dsh/pet-balance-panel/panel.log`（+ `panel.log.1`） |
+| 用户配置（只读） | `~/.dsh/glutton-balance/config.json` |
+| 程序日志（256 KB 轮转） | `~/.dsh/glutton-balance/panel.log`（+ `panel.log.1`） |
 | launchd 输出 | `~/Library/Logs/饭桶余额/launch.log`、`launch.err.log` |
 | Electron userData | `~/Library/Application Support/饭桶余额/` |
-| 自启 plist | `~/Library/LaunchAgents/com.maimai.petbalancepanel.plist` |
+| 自启 plist | `~/Library/LaunchAgents/com.gluttonbalance.panel.plist` |
 | 旧世代 DSH 载体守护壳（已下线；install/uninstall 会清理） | `~/.dsh/pet-balance-panel/launch-via-dsh.mjs` |
+| 改名前的旧配置目录（迁移来源；默认保留，`--purge` 时删除） | `~/.dsh/pet-balance-panel/` |
 | 安装位置 | `~/Applications/饭桶余额.app` |

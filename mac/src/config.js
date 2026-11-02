@@ -271,15 +271,78 @@ function normalizeConfig(raw) {
   return cfg;
 }
 
+// ---------------- 配置目录 / 环境变量（2026-11-02 改名：glutton-balance）----------------
+// 口径：新变量 GLUTTONBALANCE_PANEL_DIR/CONFIG/LOG 优先；旧变量 PET_BALANCE_PANEL_* 保留为兼容回退。
+// 默认目录：~/.dsh/glutton-balance；旧目录 ~/.dsh/pet-balance-panel 只在首次启动迁移时读取。
+const ENV_DIR = 'GLUTTONBALANCE_PANEL_DIR';
+const ENV_CONFIG = 'GLUTTONBALANCE_PANEL_CONFIG';
+const ENV_LOG = 'GLUTTONBALANCE_PANEL_LOG';
+const LEGACY_ENV_DIR = 'PET_BALANCE_PANEL_DIR';
+const LEGACY_ENV_CONFIG = 'PET_BALANCE_PANEL_CONFIG';
+const LEGACY_ENV_LOG = 'PET_BALANCE_PANEL_LOG';
+const DEFAULT_DIR = path.join(os.homedir(), '.dsh', 'glutton-balance');
+const LEGACY_DIR = path.join(os.homedir(), '.dsh', 'pet-balance-panel');
+
+function envFirst(newName, legacyName) {
+  const v = process.env[newName];
+  if (v) return v;
+  const old = legacyName ? process.env[legacyName] : '';
+  return old || '';
+}
+
 function configPath() {
-  if (process.env.PET_BALANCE_PANEL_CONFIG) return process.env.PET_BALANCE_PANEL_CONFIG;
-  const dir = process.env.PET_BALANCE_PANEL_DIR || path.join(os.homedir(), '.dsh', 'pet-balance-panel');
-  return path.join(dir, 'config.json');
+  const override = envFirst(ENV_CONFIG, LEGACY_ENV_CONFIG);
+  if (override) return override;
+  return path.join(userDir(), 'config.json');
 }
 
 function userDir() {
-  if (process.env.PET_BALANCE_PANEL_DIR) return process.env.PET_BALANCE_PANEL_DIR;
-  return path.join(os.homedir(), '.dsh', 'pet-balance-panel');
+  return envFirst(ENV_DIR, LEGACY_ENV_DIR) || DEFAULT_DIR;
+}
+
+// 递归复制、只补缺不覆盖（迁移必须幂等，且不动新目录已有文件）
+function copyTreeNoOverwrite(src, dst, base, copied) {
+  let st;
+  try { st = fs.statSync(src); } catch (e) { return; }
+  if (st.isDirectory()) {
+    try { fs.mkdirSync(dst, { recursive: true, mode: 0o700 }); } catch (e) { return; }
+    let names = [];
+    try { names = fs.readdirSync(src); } catch (e) { return; }
+    for (const name of names) copyTreeNoOverwrite(path.join(src, name), path.join(dst, name), base, copied);
+    return;
+  }
+  if (!st.isFile()) return;
+  if (fs.existsSync(dst)) return; // 幂等：新目录已有同名文件就跳过
+  try {
+    fs.copyFileSync(src, dst);
+    try { fs.chmodSync(dst, st.mode & 0o700); } catch (e) { /* 权限失败不影响迁移 */ }
+    copied.push(path.relative(base, dst));
+  } catch (e) { /* 单个文件失败不阻断整体迁移 */ }
+}
+
+/**
+ * 首次启动：旧目录 → 新目录一次性迁移（改名兼容，2026-11-02）。
+ * 规则：只在用默认位置时做；新目录已有 config.json 或旧目录没有 config.json 就不做；
+ * 复制 config.json、bowls/、rice/（递归）；不覆盖新目录已有文件；旧目录原样保留；幂等。
+ * 返回值给 main.js 打一行日志用（本函数不直接写日志，避免循环依赖）。
+ */
+function migrateLegacyUserData() {
+  const res = { migrated: false, from: LEGACY_DIR, to: DEFAULT_DIR, copied: [], reason: '' };
+  try {
+    if (envFirst(ENV_DIR, LEGACY_ENV_DIR)) { res.reason = 'env-dir'; return res; }
+    const legacyCfg = path.join(LEGACY_DIR, 'config.json');
+    const newCfg = path.join(DEFAULT_DIR, 'config.json');
+    if (fs.existsSync(newCfg)) { res.reason = 'already-migrated'; return res; }
+    if (!fs.existsSync(legacyCfg)) { res.reason = 'no-legacy-config'; return res; }
+    fs.mkdirSync(DEFAULT_DIR, { recursive: true, mode: 0o700 });
+    copyTreeNoOverwrite(legacyCfg, newCfg, DEFAULT_DIR, res.copied);
+    copyTreeNoOverwrite(path.join(LEGACY_DIR, 'bowls'), path.join(DEFAULT_DIR, 'bowls'), DEFAULT_DIR, res.copied);
+    copyTreeNoOverwrite(path.join(LEGACY_DIR, 'rice'), path.join(DEFAULT_DIR, 'rice'), DEFAULT_DIR, res.copied);
+    res.migrated = res.copied.length > 0;
+  } catch (e) {
+    res.reason = 'error:' + String((e && e.message) || e);
+  }
+  return res;
 }
 
 function readConfigFile(p) {
@@ -305,5 +368,6 @@ function expandPath(p) {
 
 module.exports = {
   defaultConfig, normalizeConfig, configPath, userDir, readConfigFile, expandPath,
-  OFFICIAL_PRESETS, MAX_PROVIDERS,
+  migrateLegacyUserData, OFFICIAL_PRESETS, MAX_PROVIDERS,
+  ENV_DIR, ENV_CONFIG, ENV_LOG, LEGACY_ENV_DIR, LEGACY_ENV_CONFIG, LEGACY_ENV_LOG,
 };

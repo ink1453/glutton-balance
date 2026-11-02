@@ -8,21 +8,19 @@
 #   ./uninstall.sh --yes        # 配合 --purge 用，跳过二次确认
 #   ./uninstall.sh --dry-run    # 干跑：只打印计划，不删任何东西
 #
-# 自启方案（2026-11-01 第 11 轮起 = 「launchd 直启 App」）：
-#   · LaunchAgent ~/Library/LaunchAgents/com.maimai.petbalancepanel.plist 直接拉
+# 自启方案（2026-11-01 第 11 轮起 = 「launchd 直启 App」；2026-11-02 改名后 label = com.gluttonbalance.panel）：
+#   · LaunchAgent ~/Library/LaunchAgents/com.gluttonbalance.panel.plist 直接拉
 #     ~/Applications/饭桶余额.app/Contents/MacOS/Electron --autostart（KeepAlive=true）；
 #     显示窗自己持屏幕录制授权，不再依赖 DeepSeek Harness 当载体。
-#   · 卸载自启 = bootout + 删 plist + 清旧世代遗留（DSH 载体守护壳 launch-via-dsh.mjs、
+#   · 卸载自启 = bootout + 删 plist + 清旧世代遗留（旧世代 DSH 载体守护壳 launch-via-dsh.mjs 与
 #     旧 bundle id com.ricebowl.* 的 plist、本项目的 plist 迁移备份 *.bak-*）；
 #     不动 DeepSeek Harness 本体，也不动系统隐私设置。
 #
 # 设计：
 #   · 幂等：没装过也能跑，只打印「本来就没装」
 #   · 可回滚：卸载后重新跑 ./install.sh 就恢复（LaunchAgent 会重新生成）
-#   · 默认不删用户配置：~/.dsh/pet-balance-panel/ 里的 config.json、panel.log
-#     （同目录的 launch-via-dsh.mjs 是旧世代安装脚本生成的自启守护壳、不是用户配置，会删；重装不会重建）
-#     也保留 ~/Library/Application Support/饭桶余额/（Electron 自己的 userData）
-#     以及 ~/Library/Logs/饭桶余额/
+#   · 默认不删用户配置：~/.dsh/glutton-balance/ 里的 config.json、panel.log
+#     （改名前的旧目录 ~/.dsh/pet-balance-panel 默认也保留，方便回滚；--purge 时一起删）
 #   · 不删系统设置/权限记录：屏幕录制授权记录由 macOS 管理（需要的话老板自己去系统设置删）
 
 set -uo pipefail
@@ -30,15 +28,17 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 APP_NAME="饭桶余额"
-LABEL="com.maimai.petbalancepanel"
+LABEL="com.gluttonbalance.panel"
+# 旧世代 bundle id（升级/回滚时清理）
 LEGACY_LABEL="com.ricebowl.petbalancepanel"
 DEST_DIR="$HOME/Applications"
 DEST="$DEST_DIR/${APP_NAME}.app"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 LEGACY_PLIST="$HOME/Library/LaunchAgents/${LEGACY_LABEL}.plist"
 LOG_DIR="$HOME/Library/Logs/饭桶余额"
-CONFIG_DIR="$HOME/.dsh/pet-balance-panel"
-LEGACY_WRAPPER="$CONFIG_DIR/launch-via-dsh.mjs"
+CONFIG_DIR="$HOME/.dsh/glutton-balance"
+PREV_CONFIG_DIR="$HOME/.dsh/pet-balance-panel"
+LEGACY_WRAPPER="$PREV_CONFIG_DIR/launch-via-dsh.mjs"
 USERDATA_DIR="$HOME/Library/Application Support/${APP_NAME}"
 UID_NUM="$(id -u)"
 DOMAIN="gui/${UID_NUM}"
@@ -87,9 +87,9 @@ if [ "$DRY" -eq 1 ]; then
     say "  登录自启：  launchd 里没有任务（不用动）"
   fi
   if launchctl print "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1; then
-    say "  旧自启：    有旧 bundle id 的 launchd 任务（${LEGACY_LABEL}），会 bootout"
+    say "  旧世代自启：有旧 bundle id 的 launchd 任务（${LEGACY_LABEL}），会 bootout"
   else
-    say "  旧自启：    没有旧 bundle id 任务"
+    say "  旧世代自启：没有旧 bundle id 任务"
   fi
   if [ -f "$PLIST" ]; then
     say "  自启文件：  存在 ${PLIST}，会删除"
@@ -126,9 +126,9 @@ if [ "$DRY" -eq 1 ]; then
     say "  程序：      $DEST 本来就没装（无操作）"
   fi
   if [ "$PURGE" -eq 1 ]; then
-    say "  用户配置：  按 --purge，会删除 ${CONFIG_DIR}（含 config.json / panel.log）、${USERDATA_DIR}、${LOG_DIR}（不可恢复，需输 YES 确认）"
+    say "  用户配置：  按 --purge，会删除 ${CONFIG_DIR}（含 config.json / panel.log）、旧目录 ${PREV_CONFIG_DIR}、${USERDATA_DIR}、${LOG_DIR}（不可恢复，需输 YES 确认）"
   else
-    say "  用户配置：  保留 ${CONFIG_DIR}（config.json / panel.log）、${USERDATA_DIR}、$LOG_DIR"
+    say "  用户配置：  保留 ${CONFIG_DIR}（config.json / panel.log）、旧目录 ${PREV_CONFIG_DIR}、${USERDATA_DIR}、$LOG_DIR"
   fi
   say "  DSH 本体：  不碰（只删本项目的 LaunchAgent 与旧世代守护壳；DSH 与它的屏幕录制授权保留）"
   say "  系统权限：  不碰（屏幕录制记录归 macOS 管理，要清由老板自己去系统设置）"
@@ -148,7 +148,7 @@ else
   ok "launchd 里本来就没有这个任务"
 fi
 if launchctl print "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1; then
-  launchctl bootout "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1 && ok "已移除旧 bundle id 任务：$LEGACY_LABEL" || warn "旧 bundle id 任务 bootout 失败"
+  launchctl bootout "$DOMAIN/$LEGACY_LABEL" >/dev/null 2>&1 && ok "已移除旧世代 bundle id 任务：$LEGACY_LABEL" || warn "旧世代 bundle id 任务 bootout 失败"
 fi
 
 # 旧世代 DSH 载体守护壳进程：bootout 后正常会自己退；残留则按路径精确收掉
@@ -177,7 +177,7 @@ else
   ok "本来就没有自启文件：$PLIST"
 fi
 if [ -f "$LEGACY_PLIST" ]; then
-  rm -f "$LEGACY_PLIST" && ok "已删旧 bundle id 自启文件：$LEGACY_PLIST"
+  rm -f "$LEGACY_PLIST" && ok "已删旧世代 bundle id 自启文件：$LEGACY_PLIST"
 fi
 if [ "${#BACKUP_PLISTS[@]}" -gt 0 ]; then
   for _f in "${BACKUP_PLISTS[@]}"; do
@@ -225,7 +225,7 @@ fi
 step "4/5 用户数据"
 if [ "$PURGE" -eq 1 ]; then
   if [ "$ASSUME_YES" -ne 1 ]; then
-    warn "--purge 会删掉用户配置（${CONFIG_DIR}），这是不可恢复的"
+    warn "--purge 会删掉用户配置（${CONFIG_DIR} 与旧目录 ${PREV_CONFIG_DIR}），这是不可恢复的"
     printf '  确认请输入大写 YES 回车（其它任意输入=取消）：'
     ANSWER=""
     read -r ANSWER || true
@@ -233,11 +233,12 @@ if [ "$PURGE" -eq 1 ]; then
   fi
 fi
 if [ "$PURGE" -eq 1 ]; then
-  for d in "$CONFIG_DIR" "$USERDATA_DIR" "$LOG_DIR"; do
+  for d in "$CONFIG_DIR" "$PREV_CONFIG_DIR" "$USERDATA_DIR" "$LOG_DIR"; do
     if [ -e "$d" ]; then rm -rf "$d" && ok "已删：$d"; fi
   done
 else
   ok "保留用户配置：${CONFIG_DIR}（config.json / panel.log 都在，重装即恢复）"
+  [ -e "$PREV_CONFIG_DIR" ] && ok "保留改名前的旧配置目录：$PREV_CONFIG_DIR（可回滚，--purge 时一起删）"
   [ -e "$USERDATA_DIR" ] && ok "保留 Electron 数据：$USERDATA_DIR"
   [ -e "$LOG_DIR" ] && ok "保留运行日志：$LOG_DIR"
 fi
@@ -247,7 +248,7 @@ say ""
 say "✅ 卸载完成"
 say "   程序：$( [ -d "$DEST" ] && echo "仍保留 $DEST" || echo '已删除' )"
 say "   登录自启：已关闭（LaunchAgent 已删）"
-say "   旧世代遗留：已清理（DSH 载体守护壳 launch-via-dsh.mjs / 旧 bundle id 的 plist；DSH 本体及其屏幕录制授权不动）"
+say "   旧世代遗留：已清理（旧世代 DSH 载体守护壳 / 旧 bundle id 的 plist；DSH 本体及其屏幕录制授权不动）"
 say "   用户配置：$( [ "$PURGE" -eq 1 ] && echo '已按 --purge 删除' || echo '保留（默认不删）' )"
 say ""
 say "想再装回来：$SCRIPT_DIR/install.sh（会重建 LaunchAgent）"

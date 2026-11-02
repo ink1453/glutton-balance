@@ -1,5 +1,5 @@
 'use strict';
-// 日志：~/.dsh/pet-balance-panel/panel.log（与 Win 同路径口径）
+// 日志：~/.dsh/glutton-balance/panel.log（与 Win 同路径口径；旧目录首次启动自动迁移，见 src/config.js）
 //
 // 第 7 轮乙路（#4 安全 ③「日志脱敏 + 轮转」）改口径：
 //  1) **每次写入前**判体积，超过 256 KB 立刻轮转，最多保留 3 份历史（panel.log.1 ~ .3）——
@@ -63,7 +63,8 @@ function rotateIfNeeded() {
 }
 
 function init(overridePath) {
-  logPath = overridePath || process.env.PET_BALANCE_PANEL_LOG || path.join(userDir(), 'panel.log');
+  // 新变量 GLUTTONBALANCE_PANEL_LOG 优先；旧变量 PET_BALANCE_PANEL_LOG 兼容回退（改名口径 2026-11-02）
+  logPath = overridePath || process.env.GLUTTONBALANCE_PANEL_LOG || process.env.PET_BALANCE_PANEL_LOG || path.join(userDir(), 'panel.log');
   try { fs.mkdirSync(path.dirname(logPath), { recursive: true, mode: 0o700 }); } catch (e) { /* ignore */ }
   rotateIfNeeded(); // 兼容旧行为：启动时若已超阈值先轮转一次
   ensureFileMode(logPath);

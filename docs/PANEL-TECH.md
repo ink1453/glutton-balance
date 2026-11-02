@@ -8,7 +8,7 @@
 
 在 Coopanion 桌宠**头顶（默认）或脚下**、任务栏上沿常驻显示各家用余额（默认每家一只小盆：盆里白饭越多=余额越多）。点击穿透、不抢焦点、不进 Alt+Tab。
 
-本目录是显示窗本体（X）。配置入口是配套的 Coopanion World 扩展 `pet-balance-world`（Y），也可以直接改 `config.json`。
+本目录是显示窗本体（X）。配置入口是配套的 Coopanion World 扩展 `glutton-balance`（Y），也可以直接改 `config.json`。
 
 ## 组成
 
@@ -28,7 +28,7 @@
 
 ## 快速开始
 
-把本目录放到默认位置 `%USERPROFILE%\.dsh\pet-balance-panel`（配套扩展从这里找显示窗；其他位置可用环境变量 `PET_BALANCE_PANEL_DIR` 指定）。
+把本目录放到默认位置 `%USERPROFILE%\.dsh\glutton-balance`（配套扩展从这里找显示窗；其他位置可用环境变量 `GLUTTONBALANCE_PANEL_DIR` 指定；旧变量 `PET_BALANCE_PANEL_DIR` 仍兼容，新变量优先）。
 
 ```powershell
 # 1) 编译（必做；本源码包不自带 exe）
@@ -194,7 +194,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 
 - **尺寸跟随桌宠**：`graphicsScale = clamp(/api/state 的 petScale ÷ display.petScaleRef, display.graphicsMin, display.graphicsMax)`；默认 `petScaleRef=1.05`（100% 时 scale=1.05）。盆宽 = `77px × 0.80 × graphicsScale × dpiScale`（77px=100% 时实测角色像素宽），盆高/组高/米饭窗口/标签字号全部同比例；盆底固定 1384，桌宠 `lift = 6×graphicsScale + 组高`，角色大小变化时平滑过渡。100%（盆 62px/角色 77px）与 200%（盆 117px/角色 150px）比例偏差 <4%（误差 ±10%）。
 - **配置字段**：`display.bowlStyle`（预设 **`porcelain` 白瓷饭桶（默认）** / `black` 黑陶饭桶 / `steel` 不锈钢饭桶；自定义 `custom:<名字>`；**0.0.4 起 `enamel` 搪瓷外观已删除，旧值自动回退 `porcelain`**）、`display.labelStyle`（**`L3` 盆沿木牌（默认）** / `L1` 盆沿小字 / `L2` 饭票小旗）、`display.wear`（`head` 头顶（默认）/ `feet` 脚下）、`display.nineLayout`（`pyramid` 金字塔（默认）/ `row` 一排 / `twoRows` 两排）、`display.petScaleRef/graphicsMin/graphicsMax`。
-- **饭桶资源（PNG+JSON）**：内置在 `bowls/`（black/porcelain/steel，随包发布、不含本机内容）；用户自定义放 `%USERPROFILE%\.dsh\pet-balance-panel\bowls\`；加载顺序：用户目录 → 内置，缺字段/损坏回退内置黑盆并在日志记 `WARN bowl load failed ... fallback=black`。
+- **饭桶资源（PNG+JSON）**：内置在 `bowls/`（black/porcelain/steel，随包发布、不含本机内容）；用户自定义放 `%USERPROFILE%\.dsh\glutton-balance\bowls\`；加载顺序：用户目录 → 内置，缺字段/损坏回退内置黑盆并在日志记 `WARN bowl load failed ... fallback=black`。
   - PNG：PNG-32 带透明通道、透明背景、只画空碗、碗居中、碗底贴图片底边；推荐 2x（内置为 400×340）。可选 `back` 字段指定内壁层（先画内壁→米饭→再画壳/前沿，实现「米盛在碗里」）。
   - 同名 JSON：`{"name":"白瓷碗","rice":{"x":90,"y":40,"w":220,"h":260},"rimY":160,"anchor":"bottom-center","scaleHint":1.0}`；`rice`=米饭可绘制矩形（图片坐标），米饭按 fill 0→1 从底往上长、可堆出沿；`rimY`=碗沿 y；`anchor` 默认 `bottom-center`；`scaleHint` 预留。
 - **米饭渲染**：预渲染 **11 档 fill（0..1）米粒位图** 缓存（`RiceCache`），60fps 只做 blit；米饭按碗内沿铺满、先米后碗（碗沿压住米下缘）、蓬松微起伏堆顶、浅灰米粒缝隙、无底部阴影；低额薄层/中档到盆口/满盆堆尖。

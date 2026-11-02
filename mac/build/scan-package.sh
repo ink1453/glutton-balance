@@ -174,7 +174,7 @@ if [ -f "$PLIST" ]; then
   pget() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST" 2>/dev/null; }
   expect() { local k="$1" want="$2" got; got="$(pget "$k")"
     if [ "$got" = "$want" ]; then ok "Info.plist $k = $want"; else bad "Info.plist $k = '${got}'（应为 '$want'）"; fi; }
-  expect CFBundleIdentifier "com.maimai.petbalancepanel"
+  expect CFBundleIdentifier "com.gluttonbalance.panel"
   expect CFBundleShortVersionString "0.0.4"
   expect CFBundleVersion "1"
   expect CFBundleIconFile "app.icns"
@@ -257,10 +257,10 @@ if [ -n "$CUR_USER" ]; then
   scan_pattern "本机用户名" "${CUR_USER}@[A-Za-z0-9.-]+" 0
 fi
 scan_pattern "工程目录名" 'pbp-mac|prep-1-3|pbp-mac/prep' 0
-# 旧 bundle id（改名前的旧组织标识）必须 0 命中；现行 = com.maimai.petbalancepanel（与已安装 App / LaunchAgent 一致）。
-# 同样拆成拼接形式，避免脚本源码被公开仓扫描误判，扫描能力不减。
-LEGACY_BUNDLE_ID="com."'rice'"bowl"'.petbalancepanel'
-scan_pattern "旧 bundle id" "$LEGACY_BUNDLE_ID" 0
+# 旧世代 bundle id 必须 0 命中：com.ricebowl.*；现行 = com.gluttonbalance.panel（与已安装 App / LaunchAgent 一致）。
+# 拆成拼接形式，避免脚本源码被公开仓扫描误判，扫描能力不减。
+LEGACY_BUNDLE_ID_1="com."'rice'"bowl"'.petbalancepanel'
+scan_pattern "旧 bundle id" "$LEGACY_BUNDLE_ID_1" 0
 scan_pattern "会话环境变量" 'ELECTRON_RUN_AS_NODE' 0
 scan_pattern "桌面路径" '/Desktop/' 0
 # 裸词用户名：代码里常是文字颜色变量名（ink/inkDim 这类），只汇总提示、不判问题

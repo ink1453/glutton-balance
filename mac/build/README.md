@@ -70,13 +70,13 @@ cd app-mac/build
 
 ## 登录自启（LaunchAgent）
 
-- 文件：`~/Library/LaunchAgents/com.maimai.petbalancepanel.plist`
+- 文件：`~/Library/LaunchAgents/com.gluttonbalance.panel.plist`
 - 方案：**launchd 直启 App**（App 用本机自签证书签名、自己持屏幕录制授权；不再用 DeepSeek Harness 当载体）
 - 关键项：`RunAtLoad=true`、`KeepAlive=true`、`ProgramArguments=[饭桶余额.app/Contents/MacOS/Electron, --autostart]`、`LimitLoadToSessionType=Aqua`、`ProcessType=Interactive`、`ThrottleInterval=10`
 - 不写 `ELECTRON_RUN_AS_NODE`（那是 DSH 会话 shell 的开发变量，用户登录环境没有；install.sh 有自检拒绝）
-- 加载方式：`launchctl bootstrap gui/$(id -u) <plist>`；卸载：`launchctl bootout gui/$(id -u)/com.maimai.petbalancepanel`
+- 加载方式：`launchctl bootstrap gui/$(id -u) <plist>`；卸载：`launchctl bootout gui/$(id -u)/com.gluttonbalance.panel`
 - launchd 的 stdout/stderr：`~/Library/Logs/饭桶余额/launch.log` / `launch.err.log`（安装时自动建目录）
-- 程序自己的运行日志：`~/.dsh/pet-balance-panel/panel.log`（256 KB 自动轮转）
+- 程序自己的运行日志：`~/.dsh/glutton-balance/panel.log`（256 KB 自动轮转）
 
 ## 卸载
 
@@ -87,9 +87,16 @@ cd app-mac/build
 ./uninstall.sh --purge      # 连用户配置一起删（需再输 YES 确认）
 ```
 
-- 默认保留：`~/.dsh/pet-balance-panel/`（config.json、panel.log）、`~/Library/Application Support/饭桶余额/`、`~/Library/Logs/饭桶余额/`
+- 默认保留：`~/.dsh/glutton-balance/`（config.json、panel.log）、`~/Library/Application Support/饭桶余额/`、`~/Library/Logs/饭桶余额/`
 - **不删系统权限记录**：屏幕录制授权要老板自己去「系统设置 → 隐私与安全性 → 屏幕录制」关掉
 - 可回滚：卸载后重跑 `./install.sh` 即恢复
+
+## 升级与改名兼容（2026-11-02）
+
+- 标识：mac 包名 `glutton-balance-mac`；App bundle id 与 LaunchAgent label = `com.gluttonbalance.panel`（改名前的旧 label 不写入源码；本机如留有旧 plist 由老板手动删除，install/uninstall 只清理旧世代 ricebowl 的遗留）。
+- 配置目录：默认 `~/.dsh/glutton-balance`；首次启动若新目录没有 `config.json` 且旧目录 `~/.dsh/pet-balance-panel/config.json` 存在，会自动复制 `config.json`、`bowls/`、`rice/` 到新目录（旧目录原样保留、幂等、不覆盖新文件；`panel.log` 记一行迁移说明）。
+- 环境变量：新 `GLUTTONBALANCE_PANEL_DIR/CONFIG/LOG` 优先，旧 `PET_BALANCE_PANEL_*` 仍兼容（两种都生效）。
+- 屏幕录制授权按 bundle id 记录：改 bundle id 后需要重新授权一次（步骤见 [PERMISSIONS.md](PERMISSIONS.md)）。
 
 ## 权限（老板必看）
 
@@ -138,7 +145,7 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibil
 4. 拷图标：`app.icns` → `Contents/Resources/app.icns`；`trayTemplate*.png` → `app/assets/`
 5. `native/petprobe` 补可执行位并**单独用本机自签证书签名**（Contents/Resources 里的独立可执行文件，`--deep` 不保证覆盖）
 6. 改 Info.plist：
-   `CFBundleName/CFBundleDisplayName=饭桶余额`、`CFBundleIdentifier=com.maimai.petbalancepanel`、
+   `CFBundleName/CFBundleDisplayName=饭桶余额`、`CFBundleIdentifier=com.gluttonbalance.panel`、
    `CFBundleShortVersionString=0.0.4`（build-app.sh 常量 `APP_VERSION`，与 `package.json` 同号，发布新版改一处）、
    `CFBundleVersion=1`、`CFBundleIconFile=app.icns`、
    `LSUIElement=true`、`NSHighResolutionCapable=true`、`LSMinimumSystemVersion=14.0`
@@ -159,7 +166,7 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibil
 | 双击提示「无法验证开发者」 | 见上面 Gatekeeper 段：系统设置里「仍要打开」 |
 | 菜单栏没有小盆图标 | 确认 `app/assets/trayTemplate.png` 在（`ls dist/饭桶余额.app/Contents/Resources/app/assets/`）；看 `panel.log` 里 `tray skipped` |
 | 不跟着桌宠动 | 屏幕录制没授权（看 panel.log 的 `permDenied`）；见 PERMISSIONS.md |
-| 安装后登录不自启 | `launchctl print gui/$(id -u)/com.maimai.petbalancepanel`；看 `~/Library/Logs/饭桶余额/launch.err.log` |
+| 安装后登录不自启 | `launchctl print gui/$(id -u)/com.gluttonbalance.panel`；看 `~/Library/Logs/饭桶余额/launch.err.log` |
 | 扫描报问题 | 按 `dist/package-scan.txt` 的「文件:行」改源码（路径用相对 `__dirname`/`process.resourcesPath`，密钥只从环境变量或 `~/.dsh` 读） |
 | 复验报 `resource fork, Finder information, or similar detritus not allowed` | 工作区在 iCloud 同步目录，同步服务给包内文件注入了 FinderInfo；**签名本身有效**（构建时已在非同步暂存目录 `--verify --deep --strict` 通过）。复验方法：`ditto dist/饭桶余额.app /tmp/x.app && xattr -cr /tmp/x.app && codesign --verify --deep --strict /tmp/x.app` |
 | 复验报 `Authority=` 不是 `Maizi Local Code Signing` | 误用了 ad-hoc（`-s -`）出包；老板 2026-11-01 规矩要求一律本机自签证书，重跑 `./build-app.sh` |

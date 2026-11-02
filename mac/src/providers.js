@@ -18,7 +18,7 @@ const path = require('path');
 const { expandPath } = require('./config');
 const logger = require('./logger');
 
-const UA = 'PetBalancePanel/1.0 (Mac)';
+const UA = 'GluttonBalance/1.0 (Mac)';
 // 回退变量表：仅在 keySource.var 未命中时兜底（兼容旧配置）；命中哪一项会记在 usedVar（只记变量名，不记值）
 const KEY_FALLBACKS = ['A6_CONSOLE_TOKEN', 'A6_CONSOLE_API_KEY', 'A6API_KEY', 'A6_PROXY_KEY', 'A6_KEY', 'TOKEN', 'API_KEY'];
 const OFFICIAL_URLS = {

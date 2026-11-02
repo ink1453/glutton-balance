@@ -8,7 +8,7 @@
 #         Frameworks/…                       ← Electron 运行时原样
 #         Resources/app/                     ← main.js preload.js src/ renderer/ assets/ native/ package.json
 #         Resources/app.icns                 ← build/icon/app.icns
-#         Info.plist                         ← 改成 饭桶余额 / com.maimai.petbalancepanel / LSUIElement …
+#         Info.plist                         ← 改成 饭桶余额 / com.gluttonbalance.panel / LSUIElement …
 #
 # 用法：
 #   ./build-app.sh                      # 正式包（源码 = 工程根目录）
@@ -41,8 +41,8 @@ OUT="${OUT:-$BUILD_DIR/dist/饭桶余额.app}"
 APP_NAME="饭桶余额"
 # 发布版本：与 app-mac/package.json / repo/mac/package.json 保持同号（发布新版改这一处）
 APP_VERSION="0.0.4"
-# bundle id：必须与已安装 App / LaunchAgent / 文档一致（老板 2026-11-01 定）
-APP_BUNDLE_ID="com.maimai.petbalancepanel"
+# bundle id：必须与已安装 App / LaunchAgent / 文档一致（2026-11-02 改名定稿：glutton-balance）
+APP_BUNDLE_ID="com.gluttonbalance.panel"
 # 签名身份：老板 2026-11-01 定的硬规矩——打包/重签一律用本机自签证书，不再用 ad-hoc（-）
 # （ad-hoc 只按 cdhash 认身份，每次重打包 TCC 录屏授权就失效、死循环；对外分发换 Developer ID + 公证）
 # 换机器/公开源码自建时可用环境变量覆盖：SIGN_IDENTITY="你的证书名" ./build-app.sh

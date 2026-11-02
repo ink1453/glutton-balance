@@ -2,7 +2,7 @@
 
 > **两版导航**：本文是 **Windows 版**显示窗的安装步骤；**macOS 版**的安装步骤见 [mac/INSTALL.md](mac/INSTALL.md)（源码在 [mac/](mac/) 目录）。两版各自独立安装，共用同一个 Coopanion 扩展与配置格式。
 
-本包是「饭桶余额」的 **Windows 显示窗程序源码包**，配合 Coopanion 的 `pet-balance-world` 扩展使用。
+本包是「饭桶余额」的 **Windows 显示窗程序源码包**，配合 Coopanion 的 `glutton-balance` 扩展使用。
 
 > **本源码包不自带已编译的 `panel.exe`**：请按下面步骤在本机编译并安装。程序为源码自建、未签名，SmartScreen / 杀软可能提示，属正常现象（见 §5）。
 
@@ -11,14 +11,14 @@
 - **Windows 10 / 11**（64 位）
 - **.NET Framework 4.x**：Windows 自带 `csc.exe` 编译器（通常位于 `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe`），不需要额外安装 .NET SDK
 - **Coopanion 0.2.16+**（World API 6）
-- 在 Coopanion 扩展市场安装并启用 **「饭桶余额」** 扩展（`pet-balance-world`）
+- 在 Coopanion 扩展市场安装并启用 **「饭桶余额」** 扩展（`glutton-balance`）
 
 ## 2. 安装步骤（推荐顺序）
 
 1. **解压**本源码包到任意目录。
 2. **放到默认位置**（推荐）：把解压出的整个目录放到
-   `%USERPROFILE%\.dsh\pet-balance-panel`
-   扩展默认从这里查找显示窗；如放别处，请设置环境变量 `PET_BALANCE_PANEL_DIR` 指向该目录。
+   `%USERPROFILE%\.dsh\glutton-balance`
+   扩展默认从这里查找显示窗；如放别处，请设置环境变量 `GLUTTONBALANCE_PANEL_DIR` 指向该目录（旧变量 `PET_BALANCE_PANEL_DIR` 仍兼容，新变量优先）。
 3. **编译**（在源码目录打开 PowerShell）：
 
    ```powershell

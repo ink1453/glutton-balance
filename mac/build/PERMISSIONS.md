@@ -56,7 +56,7 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibil
 
 也可以用命令看程序自己的运行日志（有没有「权限没给」的记录）：
 ```bash
-tail -n 50 ~/.dsh/pet-balance-panel/panel.log
+tail -n 50 ~/.dsh/glutton-balance/panel.log
 ```
 看到 `permission`、`permDenied`、`screen` 之类的行，就对照上面的步骤检查授权。
 

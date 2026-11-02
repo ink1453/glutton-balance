@@ -11,8 +11,8 @@
 # 设计（2026-11-01 第 11 轮起 = 「LaunchAgent 直启 App」）：
 #   · App 用本机自签证书 "Maizi Local Code Signing" 签名（build-app.sh 保证，禁 ad-hoc）→
 #     显示窗自己持屏幕录制授权，不再依赖 DeepSeek Harness 当载体（旧方案已下线）。
-#   · 自启 = ~/Library/LaunchAgents/com.maimai.petbalancepanel.plist：
-#       Label=com.maimai.petbalancepanel
+#   · 自启 = ~/Library/LaunchAgents/com.gluttonbalance.panel.plist：
+#       Label=com.gluttonbalance.panel
 #       ProgramArguments=[~/Applications/饭桶余额.app/Contents/MacOS/Electron, --autostart]
 #       RunAtLoad=true / KeepAlive=true / LimitLoadToSessionType=Aqua
 #       ProcessType=Interactive / ThrottleInterval=10
@@ -29,8 +29,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_SRC="$SCRIPT_DIR/dist/饭桶余额.app"
 APP_NAME="饭桶余额"
 DEST_DIR="$HOME/Applications"
-LABEL="com.maimai.petbalancepanel"
+LABEL="com.gluttonbalance.panel"
 # 旧世代（DSH 载体方案 / 旧 bundle id）的遗留物：安装时顺手清理，避免两套自启打架
+# com.ricebowl.* = 旧世代
 LEGACY_LABEL="com.ricebowl.petbalancepanel"
 LEGACY_PLIST="$HOME/Library/LaunchAgents/${LEGACY_LABEL}.plist"
 LEGACY_WRAPPER="$HOME/.dsh/pet-balance-panel/launch-via-dsh.mjs"
@@ -114,7 +115,8 @@ if [ "$DRY" -eq 1 ]; then
     say "  登录自启：  按 --no-autostart，不写 plist（若已有旧 plist 会被删掉）"
   fi
   say "  日志目录：  ${LOG_DIR}（将创建）"
-  say "  遗留清理：  $( [ -f "$LEGACY_WRAPPER" ] && echo "会删旧版 DSH 载体守护壳 $LEGACY_WRAPPER" || echo '无旧 DSH 载体守护壳' )；$( [ -f "$LEGACY_PLIST" ] && echo "会删旧 bundle id plist" || echo '无旧 bundle id plist' )"
+  say "  遗留清理：  $( [ -f "$LEGACY_WRAPPER" ] && echo "会删旧版 DSH 载体守护壳 $LEGACY_WRAPPER" || echo '无旧 DSH 载体守护壳' )；$( [ -f "$LEGACY_PLIST" ] && echo "会删旧世代 bundle id plist" || echo '无旧世代 bundle id plist' )"
+  say "  配置迁移：  $( [ -f "$HOME/.dsh/pet-balance-panel/config.json" ] && [ ! -f "$HOME/.dsh/glutton-balance/config.json" ] && echo "首次启动会把旧配置目录迁到 ~/.dsh/glutton-balance（旧目录保留）" || echo '无需迁移（新目录已有配置，或旧目录不存在）' )"
   say "  运行实例：  $( pgrep -f "$BIN" >/dev/null 2>&1 && echo '有旧实例，会先温和退出/兜底结束' || echo '无旧实例' )"
   say "  系统权限：  不碰（屏幕录制要老板自己在「系统设置 → 隐私与安全性」给「饭桶余额」点一次允许）"
   say ""
@@ -180,7 +182,7 @@ else
   warn "安装后签名校验未通过（本机通常仍能跑；正式分发需要签名+公证）"
 fi
 
-# 日志目录（launchd 的 stdout/stderr 落这里；主程序自己的 panel.log 在 ~/.dsh/pet-balance-panel/）
+# 日志目录（launchd 的 stdout/stderr 落这里；主程序自己的 panel.log 在 ~/.dsh/glutton-balance/）
 mkdir -p "$LOG_DIR"
 
 # ---- 3. 登录自启（LaunchAgent 直启 App）----
@@ -313,9 +315,9 @@ say ""
 say "✅ 装好了"
 say "   程序位置：$DEST"
 say "   登录自启：$( [ "$AUTOSTART" -eq 1 ] && echo '已开启' || echo '未开启（--no-autostart）' )"
-say "   自启方式：launchd 直启 App（com.maimai.petbalancepanel.plist；KeepAlive=true，退出后自动拉起）"
+say "   自启方式：launchd 直启 App（com.gluttonbalance.panel.plist；KeepAlive=true，退出后自动拉起）"
 say "   运行日志：$LOG_DIR/launch.log（launchd 输出）"
-say "            ~/.dsh/pet-balance-panel/panel.log（程序自己的运行日志）"
+say "            ~/.dsh/glutton-balance/panel.log（程序自己的运行日志；首次启动自动从旧目录迁移配置）"
 say ""
 say "第一次使用（重要）："
 say "   1. 程序需要「屏幕录制」权限（用来找 Coopanion 桌宠位置）。首次启动会弹权限引导小窗，"

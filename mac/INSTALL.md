@@ -1,6 +1,6 @@
 # INSTALL · 饭桶余额 macOS 显示窗（源码 · v0.0.4）
 
-本目录是 **macOS 版**「饭桶余额」显示窗的源码包，配合 Coopanion 的 `pet-balance-world` 扩展使用。本文说明从源码到安装的完整步骤。
+本目录是 **macOS 版**「饭桶余额」显示窗的源码包，配合 Coopanion 的 `glutton-balance` 扩展使用。本文说明从源码到安装的完整步骤。
 
 > 本源码包**不自带 Electron 运行时，也不带已编译的 .app**：需要本机用官方 Electron 运行时打一次包。程序为源码自建、用**本机自签证书**签名（默认 `Maizi Local Code Signing`，可用 `SIGN_IDENTITY` 覆盖），首次打开可能被 Gatekeeper 提示，属正常现象（见 §4）。
 
@@ -8,7 +8,7 @@
 
 - **macOS 14 或更高**，**Apple 芯片（arm64）**
 - **Coopanion 0.2.16+**（World API 6）
-- 已在 Coopanion 里安装并启用 **「饭桶余额」** 扩展（`pet-balance-world`）
+- 已在 Coopanion 里安装并启用 **「饭桶余额」** 扩展（`glutton-balance`）
 - **Electron 38.8.6 arm64 运行时**：从 Electron 官方发布页下载 `electron-v38.8.6-darwin-arm64.zip`，解压后把 `Electron.app` 放到本目录的 `tools/Electron.app`（或任意位置，构建时用 `--electron-src=<路径>` 指定）。运行时体积较大，不进仓库。
 - **代码签名证书**：打包脚本默认使用本机自签证书 `Maizi Local Code Signing`（规矩：**禁 ad-hoc**——ad-hoc 每次重打包屏幕录制授权都会失效）。
   没有该证书时用环境变量指定自己的证书：`SIGN_IDENTITY="你的证书名" ./build/build-app.sh`；全新机器可在「钥匙串访问 → 证书助理 → 创建证书」建一张「代码签名」用途的自签证书。
@@ -37,7 +37,7 @@
 ```
 
 - 装到 `~/Applications/饭桶余额.app`
-- 写登录自启 `~/Library/LaunchAgents/com.maimai.petbalancepanel.plist`：
+- 写登录自启 `~/Library/LaunchAgents/com.gluttonbalance.panel.plist`：
   - 方案 = **launchd 直启 App**：`ProgramArguments = [~/Applications/饭桶余额.app/Contents/MacOS/Electron, --autostart]`；
     `RunAtLoad=true`、`KeepAlive=true`（退出后自动拉起）、`LimitLoadToSessionType=Aqua`、`ProcessType=Interactive`、`ThrottleInterval=10`。
   - 不写 `ELECTRON_RUN_AS_NODE`，不依赖其它宿主程序（旧版「DSH 载体」方案已下线，历史遗留自动清理）。
@@ -55,11 +55,12 @@
 
 ## 5. 配置
 
-- 配置文件：`~/.dsh/pet-balance-panel/config.json`（默认路径；可用 `PET_BALANCE_PANEL_DIR` / `PET_BALANCE_PANEL_CONFIG` 覆盖）。
+- 配置文件：`~/.dsh/glutton-balance/config.json`（默认路径；可用 `GLUTTONBALANCE_PANEL_DIR` / `GLUTTONBALANCE_PANEL_CONFIG` 覆盖）。
+- 改名兼容（2026-11-02）：新变量 `GLUTTONBALANCE_PANEL_*` 优先、旧变量 `PET_BALANCE_PANEL_*` 仍兼容；首次启动若新目录没有 `config.json` 且旧目录 `~/.dsh/pet-balance-panel/config.json` 存在，会自动迁移 `config.json`、`bowls/`、`rice/` 到新目录（旧目录保留、幂等、不覆盖）。
 - 与 Windows 版**同一份配置格式**：`providers`、`display`（含 `wear` 固定 `head`）、`interaction`、`theme`、`position` 等字段一致。
 - **内置饭桶外观三款**：白瓷（默认，`porcelain`）/ 黑陶（`black`）/ 不锈钢（`steel`）；旧配置里的**搪瓷（`enamel`）已下线**，会自动回退白瓷（日志有 WARN 提示，不报错）。
 - `keySource` 里的文件路径支持 `~`、`$VAR`、`%VAR%` 展开：**Windows 示例中的 `%USERPROFILE%\.dsh\.env` 在 macOS 上请改成 `~/.dsh/.env`**。
-- 日志：`~/.dsh/pet-balance-panel/panel.log`；LaunchAgent 日志：`~/Library/Logs/饭桶余额/`。
+- 日志：`~/.dsh/glutton-balance/panel.log`；LaunchAgent 日志：`~/Library/Logs/饭桶余额/`。
 
 ## 6. 更新 / 卸载
 

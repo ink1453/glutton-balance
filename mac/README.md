@@ -1,6 +1,6 @@
 # 饭桶余额 · macOS 显示窗（源码 · v0.0.4）
 
-macOS 版的「饭桶余额」显示窗：在 Coopanion 桌宠头顶摆一排小饭桶，桶里米饭多少 = 余额还剩多少。本目录是它的**源码 + 构建/安装脚本**，用 Electron 实现，和仓库根目录的 Windows 版（.NET）是两套独立程序，共用同一个 Coopanion 扩展（`pet-balance-world`）与同一份 `config.json` 配置格式。
+macOS 版的「饭桶余额」显示窗：在 Coopanion 桌宠头顶摆一排小饭桶，桶里米饭多少 = 余额还剩多少。本目录是它的**源码 + 构建/安装脚本**，用 Electron 实现，和仓库根目录的 Windows 版（.NET）是两套独立程序，共用同一个 Coopanion 扩展（`glutton-balance`）与同一份 `config.json` 配置格式。
 
 > 版本：macOS 显示窗 **0.0.4**（与 Windows 显示窗、Coopanion 扩展、GitHub Release 同号）。许可：MIT（与仓库一致）。
 
@@ -53,11 +53,12 @@ test/                                    布局自检、拖拽冻结仿真、冒
 
 ## 配置
 
-- 配置文件：`~/.dsh/pet-balance-panel/config.json`（与 Windows 版同一格式；可用环境变量 `PET_BALANCE_PANEL_DIR` / `PET_BALANCE_PANEL_CONFIG` 改位置）。
+- 配置文件：`~/.dsh/glutton-balance/config.json`（与 Windows 版同一格式；可用环境变量 `GLUTTONBALANCE_PANEL_DIR` / `GLUTTONBALANCE_PANEL_CONFIG` 改位置）。
+- 改名兼容（2026-11-02）：新变量 `GLUTTONBALANCE_PANEL_*` 优先、旧变量 `PET_BALANCE_PANEL_*` 仍兼容；首次启动若新目录没有 `config.json` 且旧目录 `~/.dsh/pet-balance-panel/config.json` 存在，会自动迁移 `config.json`、`bowls/`、`rice/` 到新目录（旧目录保留、幂等、不覆盖）。
 - 首次运行会写入默认配置；余额来源在 Coopanion 的「饭桶余额」扩展设置页里填写并保存，显示窗约 5 秒内热载生效。
 - **内置饭桶外观三款**：白瓷（默认，`porcelain`）/ 黑陶（`black`）/ 不锈钢（`steel`）。旧版配置里的**搪瓷（`enamel`）已整套下线**，旧配置写 `"bowlStyle": "enamel"` 会**自动回退白瓷**（不崩、不报错；`panel.log` 会写一条 `WARN bowlStyle=enamel 已下线/未知 → 回退 porcelain`）。
 - `keySource` 的路径支持 `~`、`$VAR`、`%VAR%` 展开；**Windows 示例里的 `%USERPROFILE%` 在 macOS 上请改成 `~/.dsh/.env` 之类的路径**。
-- 日志：`~/.dsh/pet-balance-panel/panel.log`。
+- 日志：`~/.dsh/glutton-balance/panel.log`。
 
 ## 本地自测（可选，需要 Node.js）
 

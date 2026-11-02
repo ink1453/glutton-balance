@@ -11,6 +11,14 @@
 - **材质稿定稿（P2-A 最终稿）**：黑陶改哑光深色、不锈钢加竖向拉丝与高光条、白瓷桶身不动只统一桶沿下沿水线；三套 front / back PNG 有观感更新（透明通道像素与 0.0.3 一致）。
 - **文档**：README / INSTALL / 技术说明统一「三款外观 + 旧搪瓷配置回退白瓷」；发布截图已随本轮重拍（01–07，与扩展 world 包内截图逐字节一致）。
 
+### 改名（0.0.4 起）
+
+- **项目统一英文名 GluttonBalance / 标识 glutton-balance**：GitHub 仓库改为 `ink1453/glutton-balance`（旧仓库链接自动跳转）；npm 包名与 Coopanion 扩展 ID 由 `pet-balance-world` 改为 **`glutton-balance`**，旧包停在 0.0.3 并已弃用（老安装需重装新包）。
+- **本机路径统一**：配置/安装目录 `~/.dsh/glutton-balance`（Windows `%USERPROFILE%\\.dsh\\glutton-balance`）；首次启动自动从旧目录 `~/.dsh/pet-balance-panel` 迁移 `config.json`/`bowls/`/`rice/`（旧目录原样保留）。环境变量 `GLUTTONBALANCE_PANEL_*` 优先，旧 `PET_BALANCE_PANEL_*` 仍兼容。
+- **macOS 标识**：bundle id / LaunchAgent label 改为 `com.gluttonbalance.panel`；App 名仍「饭桶余额」，安装路径不变（改标识后需重新授权一次「屏幕录制」）。
+- **Windows 标识**：开机自启键 `GluttonBalance`、开始菜单 `GluttonBalance.lnk`，安装目录 `%USERPROFILE%\\.dsh\\glutton-balance`；卸载/升级脚本兼容清理旧名。
+- **Release 资产**：0.0.4 起为 `glutton-balance-x-<版本>-src.zip` / `glutton-balance-mac-<版本>-src.zip`；历史资产名保持不变。
+
 ### macOS 显示窗（v0.0.4）
 
 - **晃晕唤出**：在桌面快速晃鼠标（2 秒内左右反转 ≥4 次）唤出明细面板，再晃一下收起；不自动消失，带四重防误触（阈值/间隔/拖动/静止判定）。
@@ -24,7 +32,7 @@
 - **材质资产同步**：白瓷 / 黑陶 / 不锈钢按 A 最终稿更新（与 macOS 同一套素材）。
 - 主题跟随 / 动画漂移等 macOS 侧改进仍未移植到 Windows 面板（已知差异，按 0.0.3 旧行为验收，不是回归）。
 
-### Coopanion 扩展（`pet-balance-world` v0.0.4）
+### Coopanion 扩展（`glutton-balance` v0.0.4 · 新名首发）
 
 - 设置页外观选项 4 → 3（白瓷 / 黑陶 / 不锈钢）；读取旧配置时把 `enamel` 及未知值归一化为 `porcelain`，绝不把旧值传给显示窗。
 - 扩展包内中英文简介同步「三款饭桶外观」；README / CHANGELOG 更新。

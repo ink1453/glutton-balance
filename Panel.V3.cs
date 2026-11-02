@@ -13,7 +13,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 
-namespace PetBalancePanel
+namespace GluttonBalance
 {
     // ================================================================== 主题
     internal sealed class ThemeInfo
@@ -393,8 +393,13 @@ namespace PetBalancePanel
 
         public static string UserBowlDir()
         {
-            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            return Path.Combine(Path.Combine(Path.Combine(home, ".dsh"), "pet-balance-panel"), "bowls");
+            // 2026-11-02 改名：默认 ~/.dsh/glutton-balance/bowls；
+            // 兼容回退：新目录还没有自定义饭桶时，读旧目录 ~/.dsh/pet-balance-panel/bowls。
+            string dir = Path.Combine(Program.UserDataDir(), "bowls");
+            if (Directory.Exists(dir)) return dir;
+            string legacy = Path.Combine(Program.LegacyUserDataDir(), "bowls");
+            if (Directory.Exists(legacy)) return legacy;
+            return dir;
         }
 
         private static string BuiltinDir()
@@ -580,8 +585,11 @@ namespace PetBalancePanel
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
             string builtin = Path.Combine(baseDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), "rice");
             if (File.Exists(Path.Combine(builtin, "rice-10.png"))) return builtin;
-            string user = Path.Combine(Path.Combine(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dsh"), "pet-balance-panel"), "rice");
+            string user = Path.Combine(Program.UserDataDir(), "rice");
             if (File.Exists(Path.Combine(user, "rice-10.png"))) return user;
+            // 改名兼容：新目录没有自定义米饭时回退旧目录
+            string legacy = Path.Combine(Program.LegacyUserDataDir(), "rice");
+            if (File.Exists(Path.Combine(legacy, "rice-10.png"))) return legacy;
             return "";
         }
 

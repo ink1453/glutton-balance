@@ -4,10 +4,10 @@
 
 ![9 家金字塔](screenshots/05-panel-pyramid-dark.png)
 
-> **当前版本：v0.0.4（开发中，尚未发布）**（Coopanion 扩展 `pet-balance-world`、macOS 显示窗、Windows 显示窗源码同号 0.0.4；上一个已发布版本为 0.0.3，正式发布与 Release 资产以 R-48 双端双网验证后为准）。
+> **当前版本：v0.0.4（开发中，尚未发布）**（Coopanion 扩展 `glutton-balance`（旧包名「pet-balance-world」已弃用）、macOS 显示窗、Windows 显示窗源码同号 0.0.4；上一个已发布版本为 0.0.3，正式发布与 Release 资产以 R-48 双端双网验证后为准）。
 
-> 🤖 **AI 一键安装（把这条链接交给你的 AI 助手）**：<https://raw.githubusercontent.com/ink1453/pet-balance-panel/main/AI-INSTALL.md>
-> 说明见 [`AI-INSTALL.md`](AI-INSTALL.md)（扩展 + Windows/macOS 两版显示窗的安装/验证/回滚步骤，不碰密钥）；备用下载入口：[Releases](https://github.com/ink1453/pet-balance-panel/releases/latest)。
+> 🤖 **AI 一键安装（把这条链接交给你的 AI 助手）**：<https://raw.githubusercontent.com/ink1453/glutton-balance/main/AI-INSTALL.md>
+> 说明见 [`AI-INSTALL.md`](AI-INSTALL.md)（扩展 + Windows/macOS 两版显示窗的安装/验证/回滚步骤，不碰密钥）；备用下载入口：[Releases](https://github.com/ink1453/glutton-balance/releases/latest)。
 
 > **两套显示窗，各自安装**：本仓库同时包含 **Windows 版**（`Panel.cs` / `Panel.V3.cs`，C# / .NET Framework 4.8）与 **macOS 版**（[`mac/`](mac/README.md)，Electron 38 / macOS 14+ / Apple 芯片）显示窗源码。两版共用同一个 Coopanion 扩展（设置页）和同一份 `config.json` 配置格式，但构建与安装方式不同、互不依赖。
 
@@ -45,7 +45,7 @@ screenshots/                            扩展设置页 / 显示窗截图
 ## 安装（Windows）
 
 1. 在 Coopanion 扩展市场安装并启用「饭桶余额」（本条目为「需另装」类型）。
-2. 到本仓库 Releases 下载 Windows 显示窗源码包（0.0.4 起为 `pet-balance-panel-x-0.0.4-src.zip`；当前已发布资产见 Releases），按包内 `INSTALL.md` 用系统自带的 .NET Framework 4.8 编译，再运行 `install.ps1` 完成安装（装到用户主目录 `.dsh/pet-balance-panel`，写开机自启与开始菜单快捷方式，桌面零文件）。
+2. 到本仓库 Releases 下载 Windows 显示窗源码包（0.0.4 起为 `glutton-balance-x-0.0.4-src.zip`；当前已发布资产见 Releases），按包内 `INSTALL.md` 用系统自带的 .NET Framework 4.8 编译，再运行 `install.ps1` 完成安装（装到用户主目录 `.dsh/glutton-balance`，写开机自启与开始菜单快捷方式，桌面零文件）。
 3. 打开「饭桶余额」设置页，填余额来源，保存后约 5 秒生效。
 
 > 显示窗为源码自建、**未签名**，若出现「Windows 已保护你的电脑」提示属正常，点「更多信息 → 仍要运行」即可。
@@ -55,7 +55,7 @@ screenshots/                            扩展设置页 / 显示窗截图
 > 详细分步说明、权限与卸载见 [mac/INSTALL.md](mac/INSTALL.md)。
 
 1. 前置：**macOS 14+ / Apple 芯片（arm64）**、Coopanion 0.2.16+，并已在 Coopanion 里安装启用「饭桶余额」扩展。
-2. 到本仓库 Releases 下载 macOS 显示窗源码包（0.0.4 起为 `pet-balance-panel-mac-0.0.4-src.zip`；当前已发布资产见 Releases），或直接使用本仓库 [`mac/`](mac/) 目录。
+2. 到本仓库 Releases 下载 macOS 显示窗源码包（0.0.4 起为 `glutton-balance-mac-0.0.4-src.zip`；当前已发布资产见 Releases），或直接使用本仓库 [`mac/`](mac/) 目录。
 3. 下载 Electron 38.8.6 arm64 运行时（官方 `Electron.app`），放到 `mac/tools/Electron.app`，或用 `--electron-src=<路径>` 指定（运行时不进仓库）。
 4. 构建并安装：
 
