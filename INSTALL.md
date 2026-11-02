@@ -84,5 +84,5 @@
 
 ## 8. 版本
 
-- 版本：`0.0.4`（开发中，尚未正式发布；与 macOS 显示窗、Coopanion 扩展、GitHub Release 同号）
+- 版本：`0.0.4`（2026-11-02 已发布；与 macOS 显示窗、Coopanion 扩展、GitHub Release 同号）
 - 详细更新日志见 Coopanion 扩展市场「饭桶余额」条目与扩展包内 `CHANGELOG.md`。

@@ -4,7 +4,7 @@
 
 ![9 家金字塔](screenshots/05-panel-pyramid-dark.png)
 
-> **当前版本：v0.0.4（开发中，尚未发布）**（Coopanion 扩展 `glutton-balance`（旧包名「pet-balance-world」已弃用）、macOS 显示窗、Windows 显示窗源码同号 0.0.4；上一个已发布版本为 0.0.3，正式发布与 Release 资产以 R-48 双端双网验证后为准）。
+> **当前版本：v0.0.4（2026-11-02 已发布）**（Coopanion 扩展 `glutton-balance`（旧包名「pet-balance-world」已弃用）、macOS 显示窗、Windows 显示窗源码同号 0.0.4；上一个已发布版本为 0.0.3；GitHub Release / npm / 市场均已上线并通过 R-48 双端双网核对）。
 
 > 🤖 **AI 一键安装（把这条链接交给你的 AI 助手）**：<https://raw.githubusercontent.com/ink1453/glutton-balance/main/AI-INSTALL.md>
 > 说明见 [`AI-INSTALL.md`](AI-INSTALL.md)（扩展 + Windows/macOS 两版显示窗的安装/验证/回滚步骤，不碰密钥）；备用下载入口：[Releases](https://github.com/ink1453/glutton-balance/releases/latest)。
@@ -80,7 +80,7 @@ screenshots/                            扩展设置页 / 显示窗截图
 
 ## 更新日志
 
-见 [CHANGELOG.md](CHANGELOG.md)（当前 **v0.0.4（开发中）**：三套内置外观、删除搪瓷外观并回退白瓷、晃晕唤出、安全与失败提示优化、材质稿定稿）。
+见 [CHANGELOG.md](CHANGELOG.md)（当前 **v0.0.4（已发布）**：三套内置外观、删除搪瓷外观并回退白瓷、晃晕唤出、安全与失败提示优化、材质稿定稿）。
 
 ## 许可
 
