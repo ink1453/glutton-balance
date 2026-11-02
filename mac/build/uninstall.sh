@@ -238,7 +238,7 @@ if [ "$PURGE" -eq 1 ]; then
   done
 else
   ok "保留用户配置：${CONFIG_DIR}（config.json / panel.log 都在，重装即恢复）"
-  [ -e "$PREV_CONFIG_DIR" ] && ok "保留改名前的旧配置目录：$PREV_CONFIG_DIR（可回滚，--purge 时一起删）"
+  [ -e "$PREV_CONFIG_DIR" ] && ok "保留改名前的旧配置目录：${PREV_CONFIG_DIR}（可回滚，--purge 时一起删）"
   [ -e "$USERDATA_DIR" ] && ok "保留 Electron 数据：$USERDATA_DIR"
   [ -e "$LOG_DIR" ] && ok "保留运行日志：$LOG_DIR"
 fi

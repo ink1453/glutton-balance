@@ -82,10 +82,14 @@ ok "源包：${APP_SRC}（${SRC_SIZE}，版本 ${SRC_VER}，标识 ${SRC_ID}）"
 [ "$SRC_ID" = "$LABEL" ] || warn "源包 bundle id 是 ${SRC_ID}，与登录自启 Label（${LABEL}）不一致，请先跑 ./build-app.sh 重打"
 
 SRC_AUTH="$(codesign -dv --verbose=4 "$APP_SRC" 2>&1 | sed -n 's/^Authority=//p' | head -1)"
+# Finder/iCloud 扩展属性（com.apple.FinderInfo 等）会让 --deep --strict 误报 detritus；先清掉再验
+if ! codesign --verify --deep --strict "$APP_SRC" >/dev/null 2>&1; then
+  xattr -cr "$APP_SRC" 2>/dev/null || true
+fi
 if codesign --verify --deep --strict "$APP_SRC" >/dev/null 2>&1; then
   ok "签名校验通过（Authority=${SRC_AUTH:-?}）"
 else
-  warn "签名校验未通过（in-place 可能受 iCloud 扩展属性干扰）；建议先跑 ./build-app.sh 重签"
+  warn "签名校验未通过；建议先跑 ./build-app.sh 重签"
 fi
 
 # ---- dry-run：只打印计划，绝不改文件 ----
@@ -171,11 +175,16 @@ mkdir -p "$DEST_DIR" || die "建不了目录：$DEST_DIR"
 if [ -e "$DEST" ]; then
   rm -rf "$DEST" || die "删不掉旧版本：${DEST}（是不是正在运行？）"
 fi
+xattr -cr "$APP_SRC" 2>/dev/null || true
 ditto "$APP_SRC" "$DEST" || die "复制 app 失败"
 ok "已安装：$DEST"
 
 [ -x "$DEST/Contents/MacOS/Electron" ] || die "安装后缺可执行文件，复制可能不完整"
 plutil -lint "$DEST/Contents/Info.plist" >/dev/null 2>&1 || warn "安装后 Info.plist 校验异常"
+if ! codesign --verify --deep --strict "$DEST" >/dev/null 2>&1; then
+  # 复制过程可能带上 Finder/iCloud 扩展属性；清掉后再验一次
+  xattr -cr "$DEST" 2>/dev/null || true
+fi
 if codesign --verify --deep --strict "$DEST" >/dev/null 2>&1; then
   ok "安装后签名校验通过（--verify --deep --strict）"
 else
@@ -207,7 +216,7 @@ else
   # 旧世代遗留：DSH 载体守护壳（2026-11-01 第 11 轮起已下线，直启 App 不再需要）
   if [ -f "$LEGACY_WRAPPER" ]; then
     rm -f "$LEGACY_WRAPPER"
-    ok "已清理旧版 DSH 载体守护壳：$LEGACY_WRAPPER（新方案直启 App，不再需要）"
+    ok "已清理旧版 DSH 载体守护壳：${LEGACY_WRAPPER}（新方案直启 App，不再需要）"
   fi
   if [ -f "$LEGACY_PLIST" ]; then
     rm -f "$LEGACY_PLIST"
@@ -223,7 +232,7 @@ else
   <key>Label</key>
   <string>${LABEL}</string>
   <!-- 2026-11-01 起：launchd 直启证书签名 App（不再用 DSH 载体继承屏幕录制授权）。
-       显示窗自己持有屏幕录制授权；ProgramArguments 绝不写 ELECTRON_RUN_AS_NODE。 -->
+       显示窗自己持有屏幕录制授权；ProgramArguments 不写入 DSH 会话的开发环境变量。 -->
   <key>ProgramArguments</key>
   <array>
     <string>${BIN}</string>
@@ -263,7 +272,7 @@ PLIST_EOF
   fi
   mv -f "$TMP_PLIST" "$PLIST" || die "写入自启 plist 失败：$PLIST"
   chmod 644 "$PLIST"
-  ok "已写登录自启：$PLIST（launchd 直启 App + KeepAlive=true）"
+  ok "已写登录自启：${PLIST}（launchd 直启 App + KeepAlive=true）"
 
   if [ "$NO_START" -eq 1 ]; then
     ok "--no-start：已配置，但这次不加载启动（下次登录生效）"
