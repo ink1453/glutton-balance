@@ -26,19 +26,19 @@
 </head>
 <body>
 <div id="wrap">
-  <h1>饭桶余额需要两项系统权限</h1>
-  <p>第一次运行需要你在「系统设置 → 隐私与安全性」里点一次「允许」。程序不会自己点，也不会绕过系统弹窗。</p>
+  <h1>饭桶余额需要屏幕录制权限</h1>
+  <p>饭桶本身在 Mac 上可用。首次运行时，请在「系统设置 → 隐私与安全性 → 屏幕录制」里允许「饭桶余额」。程序不会自己点，也不会绕过系统弹窗。</p>
   <div class="item">
-    <h2>1. 屏幕录制<span class="tag must">必须</span></h2>
-    <p>用来截取 Coopanion 桌宠画面、算出头顶/脚底位置，饭桶才能贴在桌宠旁边。<br>说明：只截桌宠自己的窗口，不录屏、不上传、不保存图片。</p>
+    <h2>屏幕录制<span class="tag must">必须</span></h2>
+    <p>饭桶需要截取 Coopanion 桌宠窗口，计算头顶/脚底位置，才能贴在桌宠旁边。<br>说明：只截桌宠自己的窗口，不录屏、不上传、不保存图片。</p>
     <button class="btn primary" id="open-screen">打开「屏幕录制」设置</button>
   </div>
   <div class="item">
-    <h2>2. 辅助功能<span class="tag opt">可选</span></h2>
-    <p>当前版本不抬升桌宠（Mac 系统不允许从外部抬起 Coopanion 窗口），这项可以先不授权，不影响饭桶显示。</p>
-    <button class="btn" id="open-ax">打开「辅助功能」设置</button>
+    <h2>辅助功能<span class="tag opt">无需授权</span></h2>
+    <p>饭桶不需要辅助功能权限即可显示和跟随桌宠；请不要把「辅助功能」是否授权当作饭桶运行状态。若饭桶未显示，请先检查上面的屏幕录制权限，并确认 Coopanion 桌宠正在运行。</p>
+    <button class="btn" id="open-ax">打开「辅助功能」设置（无需操作）</button>
   </div>
-  <button class="btn primary" id="retry">我已点过「允许」，重新检测</button>
+  <button class="btn primary" id="retry">我已允许屏幕录制，重新检测</button>
   <div id="state"></div>
 </div>
 <script>

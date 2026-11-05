@@ -175,7 +175,7 @@ if [ -f "$PLIST" ]; then
   expect() { local k="$1" want="$2" got; got="$(pget "$k")"
     if [ "$got" = "$want" ]; then ok "Info.plist $k = $want"; else bad "Info.plist $k = '${got}'（应为 '$want'）"; fi; }
   expect CFBundleIdentifier "com.gluttonbalance.panel"
-  expect CFBundleShortVersionString "0.0.4"
+  expect CFBundleShortVersionString "0.0.5"
   expect CFBundleVersion "1"
   expect CFBundleIconFile "app.icns"
   expect LSMinimumSystemVersion "14.0"

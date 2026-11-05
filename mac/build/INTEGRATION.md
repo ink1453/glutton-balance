@@ -13,7 +13,7 @@
 | `permission.html` | `…/Resources/app/permission.html` |
 | `renderer/index.html` | `…/Resources/app/renderer/index.html` |
 | 托盘模板图 | `…/Resources/app/assets/trayTemplate.png`（16×16）+ `…@2x.png`（32×32） |
-| `app.getVersion()` | 工程版本（当前 `0.0.4`，来自 Info.plist `CFBundleShortVersionString`） |
+| `app.getVersion()` | 工程版本（当前 `0.0.5`，来自 Info.plist `CFBundleShortVersionString`） |
 | `app.getName()` | `饭桶余额`（`app.setName` 已做；Info.plist `CFBundleName` 也是它） |
 | 启动参数（登录自启） | launchd 直启 `饭桶余额.app/Contents/MacOS/Electron --autostart`（见 §2） |
 | 进程环境 | launchd 直启，环境干净：**没有** `ELECTRON_RUN_AS_NODE`（该变量只在 DSH 会话 shell 里出现，plist 绝不写它） |
@@ -59,14 +59,14 @@
 
 ## 4. 版本号口径
 
-- 打包版本：`CFBundleShortVersionString=0.0.4`、`CFBundleVersion=1`（`build-app.sh` 顶部常量 `APP_VERSION`，与 `app-mac/package.json` 同号；发布新版改 `build-app.sh` 这一处 + `package.json` + 重新打包）。
-- 主程序 `main.js` 的 `APP_VERSION` 已统一为 `0.0.4`（第 11 轮由历史值 `0.1.0` 修正，`panel.log` 的 `start 饭桶余额 v0.0.4` 即来自它）。
+- 打包版本：`CFBundleShortVersionString=0.0.5`、`CFBundleVersion=1`（`build-app.sh` 顶部常量 `APP_VERSION`，与 `app-mac/package.json` 同号；发布新版改 `build-app.sh` 这一处 + `package.json` + 重新打包）。
+- 主程序 `main.js` 的 `APP_VERSION` 已统一为 `0.0.5`（第 11 轮由历史值 `0.1.0` 修正，`panel.log` 的 `start 饭桶余额 v0.0.5` 即来自它）。
 - 更好的做法（后续可做）：改成 `app.getVersion()` 读 Info.plist，单一来源更稳。
 
 ## 5. 打包侧已保证（不用主程序操心）
 
 - Info.plist：`CFBundleName/CFBundleDisplayName=饭桶余额`、`CFBundleIdentifier=com.gluttonbalance.panel`、
-  `CFBundleShortVersionString=0.0.4`、`CFBundleVersion=1`、`CFBundleIconFile=app.icns`、`LSUIElement=true`、
+  `CFBundleShortVersionString=0.0.5`、`CFBundleVersion=1`、`CFBundleIconFile=app.icns`、`LSUIElement=true`、
   `NSHighResolutionCapable=true`、`LSMinimumSystemVersion=14.0`、`CFBundleExecutable=Electron`。
 - 应用图标：`Contents/Resources/app.icns` = `build/icon/app.icns`（白瓷饭桶 1024 → 10 尺寸）。
 - 托盘模板图：`app/assets/trayTemplate.png` + `@2x`。
@@ -86,7 +86,7 @@ cd app-mac/build
 ./dev-install.sh                    # 一键闭环：打包 + 备份 + 安装 + kickstart + 冒烟
 launchctl print gui/$(id -u)/com.gluttonbalance.panel   # 自启任务在（直启 App）
 ps aux | grep "饭桶余额.app/Contents/MacOS/Electron"        # 进程在
-tail -n 20 ~/.dsh/glutton-balance/panel.log               # 启动日志正常（start ... v0.0.4 / place src=...）
+tail -n 20 ~/.dsh/glutton-balance/panel.log               # 启动日志正常（start ... v0.0.5 / place src=...）
 # 出图证据（不需要屏幕录制权限）：
 env -u ELECTRON_RUN_AS_NODE \
   "$HOME/Applications/饭桶余额.app/Contents/MacOS/Electron" \

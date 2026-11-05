@@ -9,6 +9,9 @@ const logger = require('./logger');
 const MAX_AGE_MS = 3000;     // 头顶/脚底锚点超过 3s 视为过期
 const STALE_INFO_MS = 15000; // 定位信息超过 15s 视为过期
 const FAIL_KEEP_MS = 15000;  // 连续失败时保留 last-good 多久
+// 第 21 轮甲路：窗口存在性信号超过该时长没有任何刷新 → 视为「未知」（探针挂了/没权限），
+// 交给 main.js 的 5s 新鲜度兜底，避免拿一条很早的「存在」行永久挡住隐藏。
+const WINDOW_SIGNAL_STALE_MS = 3000;
 
 function median(arr) {
   const a = arr.filter(v => Number.isFinite(v)).slice().sort((x, y) => x - y);
@@ -33,6 +36,12 @@ class PetLocator {
     this.failStreak = 0;
     this.permDenied = false;
     this.lastError = '';
+    // 第 21 轮甲路：桌宠「窗口存在性」信号（CGWindowList 口径，不依赖 SCK 截图是否成功）
+    //   —— ok:true 行或带 wid 的行（含 capture-error）都算「窗口存在」；reason=no-pet-window 记缺失起点。
+    //   不能拿「扫描成功/新鲜度」代替：SCK capture-error 时窗口其实还在，用它判缺失会误隐藏。
+    this.windowSeenAt = 0;     // 最近一次窗口存在采样时刻 ms
+    this.windowMissingAt = 0;  // 窗口连续缺失起点 ms（0=当前存在/未知）
+    this.windowSignalAt = 0;   // 最近一次与存在性有关的采样时刻（存在行或 no-pet-window 行）
   }
 
   start() {
@@ -102,7 +111,21 @@ class PetLocator {
     let m;
     try { m = JSON.parse(line); } catch (e) { return; }
     this.lines++;
-    this.lastAnyAt = Date.now();
+    const now = Date.now();
+    this.lastAnyAt = now;
+    // 第 21 轮甲路：先更新「窗口存在性」信号（独立于定位是否成功）
+    //   ok:true  → 窗口存在（同一行必然带窗口信息）
+    //   带 wid   → 窗口存在（capture-error / fast warming 行也带 CGWindowList 的窗口号）
+    //   reason=no-pet-window → 窗口缺失：记连续缺失起点（已在一段缺失中则不重置）
+    const reason = String(m.reason || '');
+    if (m.ok === true || m.wid) {
+      this.windowSeenAt = now;
+      this.windowMissingAt = 0;
+      this.windowSignalAt = now;
+    } else if (reason === 'no-pet-window') {
+      this.windowSignalAt = now;
+      if (!this.windowMissingAt) this.windowMissingAt = now;
+    }
     if (m.reason && String(m.reason).indexOf('screen-permission') >= 0) this.permDenied = true;
     if (!m.ok) {
       // fast / 失败行也可能带窗口 bounds（CGWindowList 不需要权限、几乎瞬时）→ 先用于兜底定位
@@ -168,11 +191,29 @@ class PetLocator {
     return { x: i.winX, y: i.winY, width: i.winW, height: i.winH, scale: i.scale || 2 };
   }
   hasBounds() { return !!this.windowBounds(); }
+  /**
+   * 第 21 轮甲路：桌宠窗口当前是否存在（CGWindowList 口径，不依赖 SCK 截图成功）。
+   * 返回：true=存在 / false=连续缺失中 / null=还没有可用信号（探针未起，或信号超过 3s 未刷新）
+   */
+  windowPresent() {
+    const now = Date.now();
+    if (!this.windowSignalAt || (now - this.windowSignalAt) > WINDOW_SIGNAL_STALE_MS) return null;
+    if (this.windowMissingAt) return false;
+    return this.windowSeenAt ? true : null;
+  }
+  /** 第 21 轮甲路：桌宠窗口连续缺失时长 ms（窗口存在或信号未知 → 0） */
+  windowMissingMs() {
+    if (!this.windowMissingAt) return 0;
+    const now = Date.now();
+    if (!this.windowSignalAt || (now - this.windowSignalAt) > WINDOW_SIGNAL_STALE_MS) return 0;
+    return Math.max(0, now - this.windowMissingAt);
+  }
   status() {
     return {
       ok: this.isFresh(), infoOk: this.isInfoFresh(), ageMs: this.ageMs(), lines: this.lines,
       failStreak: this.failStreak, permDenied: this.permDenied, lastError: this.lastError,
       feetY: this.feetY(), headY: this.headY(),
+      windowPresent: this.windowPresent(), windowMissingMs: Math.round(this.windowMissingMs()),
     };
   }
 }

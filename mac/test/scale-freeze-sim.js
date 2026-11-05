@@ -274,11 +274,11 @@ function adoptTimeOld(samples2) {
   }
   return adopted;
 }
-const changeSamples = fakeStream(8000, 4000, 87.5, 105.0); // 静止 +20% 真实变化
+const changeSamples = fakeStream(18000, 4000, 87.5, 105.0); // 静止 +20% 真实变化
 const oldAdopt = adoptTimeOld(changeSamples);
 const newAdopt = adoptTimeNew(changeSamples, block);
 console.log('\n-- 静态真实尺寸变化（87.5→105.0pt，+20%，无位移）--');
-console.log('旧逻辑生效耗时：' + (oldAdopt - 4000) + 'ms；新逻辑生效耗时：' + (newAdopt - 4000) + 'ms（差异=拖拽冻结的保护窗口）');
+console.log('旧逻辑生效耗时：' + (oldAdopt - 4000) + 'ms；新逻辑生效耗时：' + (newAdopt - 4000) + 'ms（第 22 轮：跳变开场的大变化要稳 ≥8s 才生效，延迟可接受、不回退匹配比例）');
 
 // ---------- 4. 断言 ----------
 const errs = [];
@@ -290,7 +290,7 @@ if (begins.length && begins[0].t < 2000) errs.push('静止基线期（0–2s）�
 if (maxUncoveredRun >= 20) errs.push('有连续 ' + maxUncoveredRun + ' 帧 charW>100 时未冻结（≥20 帧会重定基准）');
 if (finalState.scaleFrozen) errs.push('仿真结束时仍处于冻结状态（解冻逻辑异常）');
 if (Math.abs(finalState.lockedCharW - 87.5) > 4) errs.push('结束时基准 ' + finalState.lockedCharW + ' 偏离正常值 87.5 过远');
-if (!Number.isFinite(newAdopt) || newAdopt - 4000 > 2500) errs.push('静态真实尺寸变化没有在 2.5s 内生效（改缩放/换皮肤会被冻住）');
+if (!Number.isFinite(newAdopt) || newAdopt - 4000 > 11500) errs.push('静态真实尺寸变化没有在 11.5s 内生效（第 22 轮：>1.25×/跳变开场要长稳定 8s，超时说明被冻死）');
 if (!Number.isFinite(oldAdopt)) errs.push('旧逻辑真实尺寸变化未生效（对照组异常）');
 
 console.log('\n结论：' + (errs.length ? '❌ 失败 ' + errs.length + ' 项' : '✅ 全部通过（旧逻辑复现 ≥3 次抖动（B1 记录 3 次）/ 新逻辑 0 次；冻结覆盖全部高 charW 采样；解冻后基准不变；真实尺寸变化仍生效）'));

@@ -390,6 +390,14 @@ namespace GluttonBalance
         /// <summary>一次抓图耗时超过该毫秒数则改为每 4s 抓一次（拖动跟随延迟 <= 4s）。</summary>
         private const long DetectSlowMs = 150;
 
+        // ---- v21（第 21 轮乙路）：桌宠生命周期跟随（Win 对齐 Mac 0.0.4）----
+        /// <summary>桌宠窗口连续缺失达到该时长才隐藏显示窗（去抖；与 Mac 的 600ms 对齐）。</summary>
+        private const long PetMissingHideMs = 600;
+        /// <summary>启动宽限：AppContext 创建后该时长内不因桌宠缺失隐藏（给桌宠自启/首次定位留时间；对齐 Mac 的 10s）。</summary>
+        private const long PetMissingStartupGraceMs = 10000;
+        /// <summary>桌宠状态（/api/state + 桌宠窗口）轮询间隔：v21 起 500→250ms，让 600ms 去抖的隐藏延迟落在 1s 内。</summary>
+        private const long PetStatePollMs = 250;
+
         public readonly object Gate = new object();
         private readonly Stopwatch clock = Stopwatch.StartNew();
         private readonly string rootDir;
@@ -419,6 +427,13 @@ namespace GluttonBalance
         public int HotkeyId;
         public string HotkeyComboApplied = "";
         public bool Visible;
+        // ---- v21（第 21 轮乙路）：桌宠生命周期跟随状态（全部只在 lock(Gate) 内改；仅 UI 线程 Repaint 消费）----
+        /// <summary>桌宠窗口缺失计时起点 = 首次发现缺失的时刻（NowMs；小于 0 表示当前未缺失）。</summary>
+        private long petMissingSinceMs = -1;
+        /// <summary>本次隐藏是否由「桌宠缺失 ≥600ms」触发（与配置/数量导致的隐藏互斥；回来只恢复由它隐藏的窗口）。</summary>
+        public bool HiddenByMissingPet;
+        /// <summary>桌宠回来、等待 Repaint 重显示（Repaint 消费后清零，用于输出 reason=pet-detected 日志）。</summary>
+        private bool petReshowPending;
         public Placement LastPlacement;
         private double lastStartX = double.NaN;
         private bool lastPetStateOk;
@@ -778,7 +793,8 @@ namespace GluttonBalance
                 try
                 {
                     long now = NowMs;
-                    if (now >= nextState) { nextState = now + 500; PollPetState(); }
+                    // v21：桌宠状态轮询 500→250ms（600ms 去抖 + 250ms 采样网格 → 隐藏延迟 0.6–0.9s，对齐 Mac ≤1s）
+                    if (now >= nextState) { nextState = now + PetStatePollMs; PollPetState(); }
                     int detectMs;
                     lock (Gate) { detectMs = (Cfg != null && Cfg.LiveFollow != null) ? Cfg.LiveFollow.DetectMs : 250; }
                     if (detectMs < 100) detectMs = 100;
@@ -822,10 +838,14 @@ namespace GluttonBalance
                 }
                 // v3.3：睡到下一个 detect 截止点（最多 150ms、最少 10ms），
                 // 让 detectMs=250 的检测节拍真正落在 250ms，而不是被固定 150ms 粒度拉成 300ms。
+                // v21：同时照顾桌宠状态轮询截止点（250ms），否则隐藏判定会被 150ms 睡眠粒度拉偏。
                 long waitMs = 150;
                 long untilDetect = nextDetect - NowMs;
                 if (untilDetect < 10) waitMs = 10;
                 else if (untilDetect < waitMs) waitMs = untilDetect;
+                long untilState = nextState - NowMs;
+                if (untilState < 10) waitMs = 10;
+                else if (untilState < waitMs) waitMs = untilState;
                 Thread.Sleep((int)waitMs);
             }
         }
@@ -1299,6 +1319,31 @@ namespace GluttonBalance
                     PetHwnd = IntPtr.Zero;
                     PetValid = false;
                     dirty = true;
+                }
+                // ---- v21（第 21 轮乙路）：桌宠生命周期跟随（Win 对齐 Mac 0.0.4）----
+                // 缺失计时起点 = 首次发现桌宠窗口缺失的时刻；状态轮询 250ms + 去抖 600ms
+                // → 实际隐藏延迟约 0.6–1.0s；启动 10s 宽限内不动显示窗。
+                long nowPetMs = NowMs;
+                if (pet != IntPtr.Zero)
+                {
+                    petMissingSinceMs = -1;
+                    if (HiddenByMissingPet)
+                    {
+                        // 桌宠回来：清「因缺失而隐藏」标志，交给 Repaint 现有的 SW_SHOWNOACTIVATE 路径重显示
+                        HiddenByMissingPet = false;
+                        petReshowPending = true;
+                        dirty = true;
+                    }
+                }
+                else
+                {
+                    if (petMissingSinceMs < 0) petMissingSinceMs = nowPetMs;
+                    long petMissingMs = nowPetMs - petMissingSinceMs;
+                    if (!HiddenByMissingPet && petMissingMs >= PetMissingHideMs && nowPetMs >= PetMissingStartupGraceMs)
+                    {
+                        HiddenByMissingPet = true;
+                        dirty = true;
+                    }
                 }
                 if (haveRect)
                 {
@@ -1993,6 +2038,10 @@ namespace GluttonBalance
             bool rice = false;
             bool expanded = false;
             BowlLayout lay = null;
+            // ---- v21（第 21 轮乙路）：桌宠缺失隐藏快照（lock 内赋值，lock 外用于日志/显隐）----
+            bool hiddenByMissingPet = false;
+            bool showByPetDetected = false;
+            long missingMsSnap = 0;
             lock (Gate)
             {
                 if (Quit) return;
@@ -2001,6 +2050,12 @@ namespace GluttonBalance
                 cfgSnap = cfg;
                 int n = EffectiveProviderCountLocked();
                 visible = cfg.Enabled && n > 0;
+                // 桌宠缺失 ≥600ms：本次不计算位置/布局、不跑动画，直接走已有的 SW_HIDE 分支（保持最后位置）
+                hiddenByMissingPet = HiddenByMissingPet;
+                showByPetDetected = petReshowPending;
+                if (showByPetDetected) petReshowPending = false;
+                missingMsSnap = petMissingSinceMs < 0 ? 0 : NowMs - petMissingSinceMs;
+                if (hiddenByMissingPet) visible = false;
                 smooth = cfg.LiveFollow == null || cfg.LiveFollow.Smooth;
                 rice = cfg.Display != null && string.Equals(cfg.Display.Style, "ricebowl", StringComparison.OrdinalIgnoreCase);
                 bool headWear = cfg.Display != null && string.Equals(cfg.Display.Wear, "head", StringComparison.OrdinalIgnoreCase);
@@ -2036,8 +2091,12 @@ namespace GluttonBalance
                         }
                     }
                 }
-                if (!pl.SameAs(LastPlacement)) logPlacement = true;
-                LastPlacement = pl;
+                if (!hiddenByMissingPet)
+                {
+                    // 缺失期间不重算位置：保持 LastPlacement（隐藏后再显示在原位置恢复）
+                    if (!pl.SameAs(LastPlacement)) logPlacement = true;
+                    LastPlacement = pl;
+                }
                 if (visible)
                 {
                     targetX = pl.X;
@@ -2059,7 +2118,16 @@ namespace GluttonBalance
                     Visible = false;
                     animActive = false;
                     idleTimerSlow = false;
-                    Log.Write("panel hidden");
+                    if (hiddenByMissingPet)
+                    {
+                        // 与 Mac 日志对齐：panel hide reason=pet-hidden missingMs=<ms>
+                        Log.Write(string.Format(CultureInfo.InvariantCulture,
+                            "panel hide reason=pet-hidden missingMs={0}", missingMsSnap));
+                    }
+                    else
+                    {
+                        Log.Write("panel hidden");
+                    }
                 }
                 return;
             }
@@ -2067,7 +2135,15 @@ namespace GluttonBalance
             {
                 Native.ShowWindow(Hwnd, Native.SW_SHOWNOACTIVATE);
                 Visible = true;
-                Log.Write("panel shown");
+                if (showByPetDetected)
+                {
+                    // 与 Mac 日志对齐：panel show reason=pet-detected
+                    Log.Write("panel show reason=pet-detected");
+                }
+                else
+                {
+                    Log.Write("panel shown");
+                }
             }
             // 内容没变只挪位置，不重绘（动画 60fps 时靠缓存位图）
             string key = ContentKeyOf(views);

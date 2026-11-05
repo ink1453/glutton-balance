@@ -19,7 +19,7 @@ const logger = require('./src/logger');
 
 const APP_ROOT = __dirname;
 const APP_NAME = '饭桶余额';
-const APP_VERSION = '0.0.4';
+const APP_VERSION = '0.0.5';
 const ASSETS_DIR = path.join(APP_ROOT, 'assets');
 const RENDERER_HTML = process.env.PBP_RENDERER || path.join(APP_ROOT, 'renderer', 'index.html');
 const PRELOAD = path.join(APP_ROOT, 'preload.js');
@@ -94,6 +94,9 @@ let petMissingSince = 0;             // 桌宠连续缺失起点 ms（0=当前�
 let noPetHidden = false;             // 是否因桌宠缺失而隐藏了显示窗
 const NO_PET_HIDE_MS = 5000;         // 桌宠消失多久后隐藏显示窗
 const NO_PET_STARTUP_GRACE_MS = 10000; // 启动宽限：启动后 10s 内不因桌宠缺失而隐藏
+// 第 21 轮甲路：桌宠「窗口存在性」快路径 —— 窗口连续缺失 ≥600ms（125ms×4~5 帧去抖）立即隐藏，
+// 不再等 5s 兜底；capture-error 带 wid = 窗口还在，不计缺失（不拿扫描新鲜度代替窗口存在性）。
+const PET_WINDOW_HIDE_MS = 600;
 // #1（0.0.4）：晃晕唤出余额面板 —— 抖动检测器 + 最近一次触发统计（日志/自测用）
 let shakeDetector = null;
 let lastShakeTrigger = null;   // {t,x,reversals,pathPt,...} 每次触发写一次，供日志/自测读取
@@ -153,22 +156,46 @@ function enforceMacDecisions(where) {
 }
 
 // 实测角色宽（pt）中值（最近 7 帧）：待机呼吸动画会让 bbox 宽抖 ±1~2pt，中值消抖。
-// 再「锁定」基准宽：只有持续偏离 >8%（约 20 帧≈0.32s，例如换皮肤/改桌宠缩放）才重新定基准，
-// 保证面板大小稳定、不跟着动画一帧一变大变小。
+// 再「锁定」基准宽：只有持续偏离 >8% 才重新定基准，保证面板大小稳定、不跟着动画一帧一变大变小。
 const charWHist = [];
 let lockedCharW = NaN;
 let charWDrift = 0;
-// charW 去噪：菜单/气泡窗口会制造 3~4 倍尖刺；候选尺寸必须来自新采样，
-// 且在窄幅范围内稳定一段时间才可替换锁定基准。真实换肤/缩放仍会匹配，只是延迟生效。
+// charW 去噪（第 22 轮甲路重写）：菜单/气泡窗口会制造 3~4 倍尖刺，且菜单态在 2.2–3.5s 内也能稳定
+// → 旧门控（稳 2.2/3.5s 就认）会把「点击/右击桌宠」的尖刺当真实尺寸变化，graphicsScale 跳到
+// 1.33/1.74/1.99、panel resize 变大。本轮三层门控：
+//   ① 「冻结只管布局值」补齐为「冻结也管重定基准」：scaleFrozen 期间清空 charWPending、不改 lockedCharW；
+//   ② 「大变化」= 相对基准 >1.25×（或 <0.8×），或本次偏离开场就是 >15% 跳变：必须新中值稳定 ≥8s、
+//      且桌宠位置静止 ≥2s、且不在拖拽冻结中，才允许重定基准 —— 菜单态尖刺 2.2–3.5s 永远到不了 8s；
+//   ③ 单次跳变只触发冻结（DRAG_HOLD_MS），回到基准附近即清空候选，不重定基准。
+// 真实改缩放/换皮肤仍是「持续偏离」：等满 8s 后按比例重排（延迟可接受，匹配比例特性不回退）。
 const CHARW_STABLE_MS = 2200;
 const CHARW_EXTREME_STABLE_MS = 3500;
 const CHARW_STABLE_SPREAD = 0.10;
-const CHARW_EXTREME_RATIO = 0.25;
+const CHARW_EXTREME_RATIO = 0.25;      // >1.25× 视为极端变化（大变化门控的另一判据）
 const CHARW_HARD_RATIO = 2.20;
 const CHARW_PENDING_MAX = 20;
+const CHARW_BIG_STABLE_MS = 8000;      // 大变化/跳变开场：长稳定下限（第 22 轮）
+const CHARW_BIG_STILL_MS = 2000;       // 大变化：桌宠位置静止下限（第 22 轮）
+const CHARW_REBASE_TOL = 0.08;         // 偏离基准多少才算「真变化」（第 22 轮，原魔数 0.08 提取）
+// 第 22 轮加固（真机点击复验发现「拎起后按住 >8s」/「菜单态驻留 >8s」仍会被当真实变化）：
+//   ④ 大变化 episode 期间，若光标在桌宠本体中心 ≤80pt（点击/右击/菜单/悬停/拎起时光标必在桌宠身上）
+//      → 「计时暂停」：不拒绝也不接受，charWStableSince 每帧重置（交互期间不累计），光标离开后重新累计，
+//      满 8s + 桌宠静止 + 无拖拽仍可接受 —— 所以「从桌宠右键菜单里改缩放」不会误杀（菜单关闭光标移开后 8s 生效）。
+//   ⑤ bodyCenter x 相对 episode 起点漂移 >10pt 只作日志字段 move=0/1，不单独拦截（真实缩放时 bbox 中心
+//      也会随缩放锚点移动 ~19pt，单靠 x 判据会误杀真缩放）。
+const CHARW_CURSOR_NEAR_PT = 80;       // 光标距桌宠本体中心 ≤ 该值 → 交互态「计时暂停」
+const CHARW_BIG_MOVE_X_PT = 10;        // 大变化 episode 内 bodyCenter x 漂移 > 该值 → 日志 move=1
 let charWLastLine = -1;
 let charWPending = [];
 let charWStableSince = 0;
+let charWBigSince = -1;                // 本次「大变化」偏离起点 ms（-1=不在偏离中；回到基准附近即清零）
+let charWJumpEpisode = false;          // 本次偏离是否以 >15% 跳变开场（跳变=先只冻结，需长稳定才认）
+let lastPetMoveAt = 0;                 // 最近一次检测到桌宠移动的时间 ms（大变化要求静止 ≥2s）
+let lastSampleCx = NaN;                // 最近一条采样的桌宠本体中心 x（pt，屏幕左上原点；光标邻近判据用）
+let lastSampleCy = NaN;                // 最近一条采样的桌宠本体中心 y = (headY+feetY)/2（pt）
+let charWEpisodeAnchorX = NaN;         // 大变化 episode 起点 bodyCenter x（move=0/1 日志用）
+let charWCursorPaused = false;         // 当前大变化 episode 是否正因「光标在桌宠身上」暂停计时（日志用）
+let charWCursorPausedLogged = false;   // 本 episode 的「计时暂停」日志只写一次，避免刷屏
 
 function medianCharW(values) {
   if (!Array.isArray(values) || !values.length) return NaN;
@@ -176,17 +203,72 @@ function medianCharW(values) {
   return a[Math.floor(a.length / 2)];
 }
 
+// 第 22 轮加固④：光标是否在桌宠本体附近。Electron screen.getCursorScreenPoint() 与 petprobe 的
+// bodyCenterPt/headPt/feetPt 同一坐标口径（屏幕左上原点、逻辑点），无需任何系统权限。
+// typeof 守卫：test/scale-freeze-sim.js 抽取本段代码在 vm 里回放时没有 screen。
+function petCursorInfo() {
+  const out = { near: false, cursor: null, center: null };
+  if (!Number.isFinite(lastSampleCx) || !Number.isFinite(lastSampleCy)) return out;
+  out.center = { x: lastSampleCx, y: lastSampleCy };
+  try {
+    if (typeof screen === 'undefined' || !screen || typeof screen.getCursorScreenPoint !== 'function') return out;
+    const p = screen.getCursorScreenPoint();
+    if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return out;
+    out.cursor = { x: p.x, y: p.y };
+    out.near = Math.hypot(p.x - lastSampleCx, p.y - lastSampleCy) <= CHARW_CURSOR_NEAR_PT;
+  } catch (e) { return out; }
+  return out;
+}
+
 function observeCharWCandidate(candidate, now) {
   if (!(Number.isFinite(candidate) && candidate > 20)) return;
+  // 第 22 轮①：拖拽/尖刺冻结期间「只冻结」—— 不累计候选、不改锁定基准（补齐旧缺口：
+  // 旧实现 scaleFrozen 只冻结 currentCharW 布局值，observeCharWCandidate 仍照常重定基准）。
+  if (scaleFrozen || now < scaleFrozenUntil) {
+    charWPending = [];
+    charWStableSince = 0;
+    return;
+  }
   if (!Number.isFinite(lockedCharW)) {
     lockedCharW = candidate;
     charWPending = [];
     charWStableSince = now;
+    charWBigSince = -1;
+    charWJumpEpisode = false;
+    charWCursorPaused = false;
+    charWCursorPausedLogged = false;
+    charWEpisodeAnchorX = NaN;
     return;
   }
   const rel = Math.abs(candidate - lockedCharW) / lockedCharW;
+  // 回到基准附近（待机呼吸/动画抖动）→ 清空候选与「大变化」跟踪，不重定基准。
+  if (rel <= CHARW_REBASE_TOL) {
+    charWPending = [];
+    charWStableSince = 0;
+    charWBigSince = -1;
+    charWJumpEpisode = false;
+    charWCursorPaused = false;
+    charWCursorPausedLogged = false;
+    charWEpisodeAnchorX = NaN;
+    return;
+  }
   // 3~4 倍尖刺直接丢弃，避免菜单/气泡把 graphicsScale 推到上限；换肤/缩放仍保留至 2.2 倍范围。
-  if (candidate > lockedCharW * CHARW_HARD_RATIO || candidate < lockedCharW / CHARW_HARD_RATIO) return;
+  // 尖刺同时打断「持续偏离」连续性：连续候选不能跨过 >2.2× 的坏样本累加。
+  if (candidate > lockedCharW * CHARW_HARD_RATIO || candidate < lockedCharW / CHARW_HARD_RATIO) {
+    charWPending = [];
+    charWStableSince = 0;
+    charWBigSince = -1;
+    charWJumpEpisode = false;
+    return;
+  }
+  // 第 22 轮②：偏离开场（相对基准 >8%）→ 记起点；若第一帧就是 >15% 跳变，本次按「大变化」处理。
+  if (charWBigSince < 0) {
+    charWBigSince = now;
+    charWJumpEpisode = rel > CHARW_JUMP_RATIO;
+    charWEpisodeAnchorX = lastSampleCx;
+    charWCursorPaused = false;
+    charWCursorPausedLogged = false;
+  }
   if (!charWPending.length) {
     charWPending = [candidate];
     charWStableSince = now;
@@ -209,16 +291,41 @@ function observeCharWCandidate(candidate, now) {
     charWStableSince = now;
     return;
   }
-  const neededMs = rel > CHARW_EXTREME_RATIO ? CHARW_EXTREME_STABLE_MS : CHARW_STABLE_MS;
-  if (now - charWStableSince >= neededMs) {
-    if (Math.abs(pMed - lockedCharW) / lockedCharW > 0.08) {
-      lockedCharW = pMed;
-      charWDrift = 0;
-      logger.write(`scale charW baseline accepted charW=${lockedCharW.toFixed(1)} stableMs=${now - charWStableSince} spread=${spread.toFixed(3)}`);
+  const big = rel > CHARW_EXTREME_RATIO || charWJumpEpisode;
+  const neededMs = big ? CHARW_BIG_STABLE_MS
+    : (rel > CHARW_EXTREME_RATIO ? CHARW_EXTREME_STABLE_MS : CHARW_STABLE_MS);
+  // 第 22 轮加固④：大变化 episode 期间光标在桌宠身上（点击/右击/菜单/悬停/拎起）→ 计时暂停
+  // （不拒绝、也不接受；charWStableSince 每帧重置 = 交互期间不累计重定基准；光标离开后重新累计）。
+  if (big) {
+    const ci = petCursorInfo();
+    if (ci.near) {
+      charWStableSince = now;
+      charWCursorPaused = true;
+      if (!charWCursorPausedLogged) {
+        charWCursorPausedLogged = true;
+        logger.write(`scale charW paused cursor-near charW=${pMed.toFixed(1)} locked=${lockedCharW.toFixed(1)} cursor=${ci.cursor ? ci.cursor.x.toFixed(1) + ',' + ci.cursor.y.toFixed(1) : '?'} petCenter=${ci.center ? ci.center.x.toFixed(1) + ',' + ci.center.y.toFixed(1) : '?'}（交互/移动态：重新定基准计时暂停，光标离开后重新累计）`);
+      }
+      return;
     }
-    charWPending = [];
-    charWStableSince = now;
+    charWCursorPaused = false;
   }
+  if (now - charWStableSince < neededMs) return;
+  // 第 22 轮②附加条件：大变化还要「桌宠位置静止 ≥2s + 不在拖拽冻结中」，否则继续等。
+  if (big && (now < scaleFrozenUntil || (lastPetMoveAt > 0 && now - lastPetMoveAt < CHARW_BIG_STILL_MS))) return;
+  const stableMs = now - charWStableSince;
+  // 第 22 轮加固⑤：bodyCenter x 相对 episode 起点漂移 >10pt 只作日志字段（不单独拦截）
+  const move = (Number.isFinite(charWEpisodeAnchorX) && Number.isFinite(lastSampleCx)
+    && Math.abs(lastSampleCx - charWEpisodeAnchorX) > CHARW_BIG_MOVE_X_PT) ? 1 : 0;
+  lockedCharW = pMed;
+  charWDrift = 0;
+  charWPending = [];
+  charWStableSince = now;
+  charWBigSince = -1;
+  charWJumpEpisode = false;
+  charWCursorPaused = false;
+  charWCursorPausedLogged = false;
+  charWEpisodeAnchorX = NaN;
+  logger.write(`scale charW baseline accepted charW=${lockedCharW.toFixed(1)} stableMs=${stableMs} spread=${spread.toFixed(3)} kind=${big ? 'big' : 'small'} move=${move}`);
 }
 
 // 明细卡：展开后给用户一个短暂操作窗口，默认 8 秒无操作自动收起。
@@ -258,30 +365,39 @@ function petSampleTick(now) {
     const i = locator.info || {};
     const cx = Number(i.bodyCenterPt);
     const hy = Number(i.headPt);
+    const fy = Number(i.feetPt);
     const cw = Number(i.charWpt);
+    // 第 22 轮加固④：记录本体中心点（光标邻近判据），head/feet 用于取本体中心 y
+    if (cx > 0 && hy > 0) {
+      lastSampleCx = cx;
+      lastSampleCy = (Number.isFinite(fy) && fy > hy) ? (hy + fy) / 2 : (hy + 54);
+    }
     if (Number.isFinite(cw) && cw > 20) {
       charWLastLine = sampleLineSeen;
       charWHist.push(cw);
       if (charWHist.length > 7) charWHist.shift();
-      observeCharWCandidate(cw, now);
     }
     // ① 位移检测：桌宠本体中心（x）/头顶（y）在相邻采样间移动 → 拖拽
     if (cx > 0 && hy > 0) {
+      if (!lastPetMoveAt) lastPetMoveAt = now;
       if (lastSamplePos && (Math.abs(cx - lastSamplePos.cx) > DRAG_MOVE_PT || Math.abs(hy - lastSamplePos.headY) > DRAG_MOVE_PT)) {
         scaleFrozenUntil = now + DRAG_HOLD_MS;
+        lastPetMoveAt = now;   // 第 22 轮：大变化门控要求「桌宠位置静止 ≥2s」
       }
       lastSamplePos = { cx: cx, headY: hy };
     }
     // ② 角色宽突变检测：拖拽提起的第一帧
     let deviated = false;
     if (Number.isFinite(cw) && cw > 20 && Number.isFinite(lockedCharW) && lockedCharW > 20) {
-      deviated = Math.abs(cw - lockedCharW) / lockedCharW > 0.08;
+      deviated = Math.abs(cw - lockedCharW) / lockedCharW > CHARW_REBASE_TOL;
       if (deviated && !lastSampleDeviated) {
         const jump = Math.abs(cw - lockedCharW) / lockedCharW > CHARW_JUMP_RATIO;
         if (jump) scaleFrozenUntil = now + DRAG_HOLD_MS;
       }
     }
     lastSampleDeviated = deviated;
+    // 第 22 轮①：候选门控放在「本帧移动/跳变冻结」之后 → 冻结期间不会累计候选、不会重定基准。
+    if (Number.isFinite(cw) && cw > 20) observeCharWCandidate(cw, now);
     // ③ #1 晃晕唤出：同一条 petprobe 采样喂给抖动检测器（与面板跟随同源，天然抵消「面板自己动」）
     //    typeof 守卫：test/scale-freeze-sim.js 会原样抽取本段代码单独回放，抽取环境里没有该函数定义。
     if (typeof feedShakeSample === 'function') feedShakeSample(now);
@@ -293,10 +409,15 @@ function petSampleTick(now) {
     const f1 = (v) => (Number.isFinite(v) ? v.toFixed(1) : 'NaN');
     if (frozen) {
       scaleFrozenAt = now;
+      // 第 22 轮①：冻结开始即清空候选（冻结期间不许重定基准）
+      charWPending = [];
+      charWStableSince = 0;
       const cw = locator && locator.info ? Number(locator.info.charWpt) : NaN;
-      logger.write(`scale freeze begin（拖拽瞬态：冻结盆宽基准 charW=${f1(cw)} locked=${f1(lockedCharW)}）`);
+      logger.write(`scale freeze begin（拖拽/尖刺瞬态：冻结盆宽基准 charW=${f1(cw)} locked=${f1(lockedCharW)}）`);
     } else {
       charWDrift = 0;
+      charWPending = [];
+      charWStableSince = now;
       logger.write(`scale freeze end（冻结 ${now - scaleFrozenAt}ms，基准 locked=${f1(lockedCharW)} 未变 → 盆宽平滑恢复）`);
     }
   }
@@ -964,14 +1085,20 @@ function positionTick() {
     if (!cfg.enabled) { schedulePosition(); return; }
     const head = layoutMod.isHead(cfg);
     // —— 第 11 轮丁路：桌宠生命周期跟随（桌宠退出 → 隐藏显示窗；桌宠回来 → 自动显示）——
+    // —— 第 21 轮甲路：窗口存在性快路径（≤1s 隐藏；capture-error 不误判）——
     // hasPet 口径：定位器的桌宠窗 bounds 有效 且 最近一次真实检测未过期（petinfo 失败时会保留 last-good bounds，
     // 不能只看 windowBounds()，否则桌宠退出后 bounds 仍残留、永远不会隐藏）
     const locState = locator ? locator.status() : null;
     const petBoundsRaw = locator ? locator.windowBounds() : null;
     const hasPet = !!(locState && locState.ok === true && petBoundsRaw && Number.isFinite(petBoundsRaw.x));
+    // 窗口存在性（CGWindowList 口径）：true=在 / false=缺失中 / null=信号未知（探针没起或信号过期，走旧兜底）
+    const winPresent = locator && typeof locator.windowPresent === 'function' ? locator.windowPresent() : null;
+    const winMissingMs = locator && typeof locator.windowMissingMs === 'function' ? locator.windowMissingMs() : 0;
+    const hasWin = winPresent !== false;
     const nowPet = Date.now();
+    const pastGrace = (nowPet - appStartedAt) >= NO_PET_STARTUP_GRACE_MS;
     let reshowPending = false;
-    if (hasPet) {
+    if (hasPet && hasWin) {
       petMissingSince = 0;
       if (noPetHidden && cfg.enabled) reshowPending = true;
     } else {
@@ -982,17 +1109,26 @@ function positionTick() {
         petMissingSince = Number.isFinite(ageMs) ? (nowPet - ageMs) : nowPet;
       }
       const missingMs = nowPet - petMissingSince;
-      const pastGrace = (nowPet - appStartedAt) >= NO_PET_STARTUP_GRACE_MS;
-      if (!noPetHidden && panelShown && missingMs >= NO_PET_HIDE_MS && pastGrace) {
+      // 异常兜底（保留原 5s 路径）：只在「窗口存在性信号未知」时生效（探针没起/挂了、信号过期）；
+      // 明确判定窗口还在（capture-error 带 wid）→ 不隐藏；明确判定窗口缺失 → 走下面的 600ms 快路径。
+      if (!noPetHidden && panelShown && missingMs >= NO_PET_HIDE_MS && pastGrace && winPresent === null) {
         try { panelWin.hide(); } catch (e) { /* ignore */ }
         panelShown = false;
         noPetHidden = true;
         logger.write(`panel hide reason=no-pet detectFailMs=${Math.round(missingMs)}`);
       }
     }
+    // 第 21 轮甲路：快路径 —— 桌宠窗口连续缺失 ≥600ms 立即隐藏（与 5s 兜底互斥：noPetHidden 守卫）
+    if (!noPetHidden && panelShown && winPresent === false && winMissingMs >= PET_WINDOW_HIDE_MS && pastGrace) {
+      try { panelWin.hide(); } catch (e) { /* ignore */ }
+      panelShown = false;
+      noPetHidden = true;
+      logger.write(`panel hide reason=pet-hidden missingMs=${Math.round(winMissingMs)}`);
+    }
     // 第 12 轮甲路：桌宠缺失期间「原地不动」——宽限期保持最后位置直到点隐藏，隐藏后同样不跑兜底 placement。
     // 旧实现会用 computePlacement 的 fallback 坐标 setPosition，导致隐藏前先漂移到屏幕顶部兜底位。
-    if (!hasPet) { schedulePosition(); return; }
+    // 第 21 轮甲路：窗口缺失（hasWin=false）也走这里 —— 从第一帧缺失起就不跑 placement/动画。
+    if (!hasWin || !hasPet) { schedulePosition(); return; }
     const pet = {
       petBounds: locator ? locator.windowBounds() : null,
       headY: locator ? locator.headY() : NaN,
