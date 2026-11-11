@@ -146,7 +146,7 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibil
 5. `native/petprobe` 补可执行位并**单独用本机自签证书签名**（Contents/Resources 里的独立可执行文件，`--deep` 不保证覆盖）
 6. 改 Info.plist：
    `CFBundleName/CFBundleDisplayName=饭桶余额`、`CFBundleIdentifier=com.gluttonbalance.panel`、
-   `CFBundleShortVersionString=0.0.5`（build-app.sh 常量 `APP_VERSION`，与 `package.json` 同号，发布新版改一处）、
+   `CFBundleShortVersionString=0.0.6`（build-app.sh 常量 `APP_VERSION`，与 `package.json` 同号，发布新版改一处）、
    `CFBundleVersion=1`、`CFBundleIconFile=app.icns`、
    `LSUIElement=true`、`NSHighResolutionCapable=true`、`LSMinimumSystemVersion=14.0`
 7. 用本机自签证书签名：先单独签 `native/petprobe` → 再 `codesign --force --deep --sign "Maizi Local Code Signing" "<app>"`；

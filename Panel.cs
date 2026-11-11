@@ -17,6 +17,13 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
+// ---- 0.0.6（第 25 轮乙路）：Win 显示窗版本元数据同号 0.0.6 ----
+// 只写 exe 的 Win32 版本资源（属性→详细信息 可查），不改任何运行逻辑；
+// 编译后可在 Win 侧核对：(Get-Item .\panel.exe).VersionInfo.FileVersion → 0.0.6.0
+[assembly: System.Reflection.AssemblyVersion("0.0.6.0")]
+[assembly: System.Reflection.AssemblyFileVersion("0.0.6.0")]
+[assembly: System.Reflection.AssemblyInformationalVersion("0.0.6")]
+
 namespace GluttonBalance
 {
     internal static class Program
@@ -341,6 +348,14 @@ namespace GluttonBalance
         public int IntervalSec = 60;
         public long LastAttemptMs = -1;
         public long LastOkMs = -1;
+        // ---- v22 网络瞬断韧性：失败后 10 分钟内继续显示「最后一次成功金额」（灰字=非实时）----
+        /// <summary>是否有过成功值（rt.LastGoodMs &gt; 0）。</summary>
+        public bool HasLastGood;
+        /// <summary>本次结果失败、但上次成功值还在 10 分钟窗口内 → 显示上次金额（灰字）。</summary>
+        public bool ShowLastGood;
+        public double LastGoodAmount;
+        public string LastGoodCurrency = "CNY";
+        public long LastGoodMs = -1;
     }
 
     internal sealed class ProviderRuntime
@@ -352,6 +367,13 @@ namespace GluttonBalance
         public volatile bool Fetching;
         public long LastAttemptMs = -1;
         public long LastOkMs = -1;
+        // ---- v22 网络瞬断韧性：记住最后一次成功值（失败不清空），并跟踪「灰字上次金额」当前是否在显示 ----
+        public double LastGoodAmount;
+        public string LastGoodCurrency = "CNY";
+        /// <summary>最后一次成功的时间（-1 = 从未成功）。</summary>
+        public long LastGoodMs = -1;
+        /// <summary>UI 当前是否正在显示「上次成功金额」（用于 10 分钟窗口到期时触发一次重绘）。</summary>
+        public bool StaleShown;
     }
 
     internal sealed class AppContext
@@ -397,6 +419,13 @@ namespace GluttonBalance
         private const long PetMissingStartupGraceMs = 10000;
         /// <summary>桌宠状态（/api/state + 桌宠窗口）轮询间隔：v21 起 500→250ms，让 600ms 去抖的隐藏延迟落在 1s 内。</summary>
         private const long PetStatePollMs = 250;
+
+        // ---- v22（第 22 轮）：网络瞬断韧性 ----
+        /// <summary>
+        /// 失败后保留「最后一次成功金额」的窗口（10 分钟）：窗口内网络瞬断继续灰字显示上次金额（不显示「连接失败」），
+        /// 超过窗口仍无成功结果才回退成「连接失败」。
+        /// </summary>
+        private const long LastGoodWindowMs = 600000;
 
         public readonly object Gate = new object();
         private readonly Stopwatch clock = Stopwatch.StartNew();
@@ -655,10 +684,14 @@ namespace GluttonBalance
             {
                 Dictionary<string, BalanceResult> oldResults = new Dictionary<string, BalanceResult>();
                 Dictionary<string, int> oldFails = new Dictionary<string, int>();
+                // v22.1：按 provider id 记住旧 runtime，热重载后继承「最后一次成功金额」记忆
+                // （否则改过 config 后首查失败 → showLastGood=0，韧性目标失效；实测 2026-11-08 22:06 暴露）
+                Dictionary<string, ProviderRuntime> oldRuntimes = new Dictionary<string, ProviderRuntime>();
                 foreach (ProviderRuntime rt in Providers)
                 {
                     oldResults[rt.Cfg.Id] = rt.Result;
                     oldFails[rt.Cfg.Id] = rt.FailStreak;
+                    oldRuntimes[rt.Cfg.Id] = rt;
                 }
                 List<ProviderRuntime> next = new List<ProviderRuntime>();
                 int maxRuntimeProviders = loaded.Capsule != null ? loaded.Capsule.MaxProviders : 9;
@@ -671,6 +704,15 @@ namespace GluttonBalance
                     if (oldResults.TryGetValue(pc.Id, out prev)) rt.Result = prev;
                     int fs;
                     if (oldFails.TryGetValue(pc.Id, out fs)) rt.FailStreak = fs;
+                    ProviderRuntime oldRt;
+                    if (oldRuntimes.TryGetValue(pc.Id, out oldRt))
+                    {
+                        // 与 Result/FailStreak 同法：同一 provider 的 last-good 记忆跨热重载保留
+                        rt.LastGoodAmount = oldRt.LastGoodAmount;
+                        rt.LastGoodCurrency = oldRt.LastGoodCurrency;
+                        rt.LastGoodMs = oldRt.LastGoodMs;
+                        rt.StaleShown = oldRt.StaleShown;
+                    }
                     rt.NextDueMs = NowMs; // 配置变化后立刻重查
                     next.Add(rt);
                 }
@@ -822,6 +864,18 @@ namespace GluttonBalance
                             {
                                 if (!rt.Cfg.Enabled || rt.Fetching || rt.Cfg.IsRice) continue;
                                 if (now >= rt.NextDueMs) { rt.Fetching = true; toStart.Add(rt); }
+                            }
+                        }
+                        // v22 网络瞬断韧性：跟踪「灰字上次金额」显示状态；10 分钟窗口到期时强制重绘一次
+                        // （失败结果本身不会重绘，否则窗口到期后还会一直挂着上次金额）
+                        foreach (ProviderRuntime rt in Providers)
+                        {
+                            bool stale = rt.Result != null && !rt.Result.Ok && rt.LastGoodMs > 0
+                                && (now - rt.LastGoodMs) <= LastGoodWindowMs;
+                            if (rt.StaleShown != stale)
+                            {
+                                rt.StaleShown = stale;
+                                Dirty = true;
                             }
                         }
                         if (Dirty) { Dirty = false; post = true; }
@@ -1113,14 +1167,25 @@ namespace GluttonBalance
                     rt.LastAttemptMs = NowMs;
                     if (res.Ok)
                     {
+                        // v22 网络瞬断韧性：记住最后一次成功金额/币种/时间（失败分支不动这些值）
                         rt.LastOkMs = NowMs;
+                        rt.LastGoodMs = rt.LastOkMs;
+                        rt.LastGoodAmount = res.Amount;
+                        rt.LastGoodCurrency = string.IsNullOrEmpty(res.Currency) ? "CNY" : res.Currency;
                         rt.FailStreak = 0;
                         rt.NextDueMs = NowMs + IntervalMs(rt.Cfg.IntervalSec);
                     }
                     else
                     {
                         rt.FailStreak = rt.FailStreak + 1;
-                        rt.NextDueMs = NowMs + IntervalMs(BackoffSec(rt.FailStreak));
+                        int nextSec = BackoffSec(rt.FailStreak);
+                        // 退避直接按秒换算毫秒（不走 IntervalMs 的「最少 10s」下限，否则 3/8s 的首轮快重试会被吃掉）
+                        rt.NextDueMs = NowMs + nextSec * 1000L;
+                        // v22：补一条简短 retry 日志（便于事后判断网络瞬断；不打印任何 key）
+                        Log.Write(string.Format(CultureInfo.InvariantCulture,
+                            "balance retry id={0} streak={1} nextIn={2}s showLastGood={3}",
+                            rt.Cfg.Id, rt.FailStreak, nextSec,
+                            (rt.LastGoodMs > 0 && (NowMs - rt.LastGoodMs) <= LastGoodWindowMs) ? 1 : 0));
                     }
                     if (!SameResult(prev, res))
                     {
@@ -1142,7 +1207,7 @@ namespace GluttonBalance
         {
             if (a == null || b == null) return false;
             if (a.Ok != b.Ok) return false;
-            if (!a.Ok) return true; // 显示固定为「连接失败」，错误文案变化不必重绘
+            if (!a.Ok) return true; // 失败态显示固定（「连接失败」或灰字上次金额），错误文案变化不必重绘（窗口到期由 worker 强制重绘）
             return Math.Abs(a.Amount - b.Amount) < 0.0005;
         }
 
@@ -1168,12 +1233,16 @@ namespace GluttonBalance
             return sec * 1000;
         }
 
+        /// <summary>
+        /// v22：失败退避（秒）——3 / 8 / 20 / 60 封顶（原 10 / 30 / 60 / 300）。
+        /// 目的：网络瞬断（本机实测约 100 秒）恢复后最多 60s 内一定重试到，不再等 5 分钟。
+        /// </summary>
         private static int BackoffSec(int failStreak)
         {
-            if (failStreak <= 1) return 10;
-            if (failStreak == 2) return 30;
-            if (failStreak == 3) return 60;
-            return 300;
+            if (failStreak <= 1) return 3;
+            if (failStreak == 2) return 8;
+            if (failStreak == 3) return 20;
+            return 60;
         }
 
         private string SafeError(Exception ex, ProviderConfig pc)
@@ -2199,6 +2268,9 @@ namespace GluttonBalance
                   .Append(v.Name).Append('|')
                   .Append(v.HasResult ? 1 : 0).Append(v.Ok ? 1 : 0).Append('|')
                   .Append(v.Amount.ToString("0.00", CultureInfo.InvariantCulture)).Append('|')
+                  // v22：失败时「上次成功金额」是否在显示也要参与内容指纹，否则 10 分钟窗口到期不会重绘成「连接失败」
+                  .Append(v.ShowLastGood ? 1 : 0).Append('|')
+                  .Append(v.LastGoodAmount.ToString("0.00", CultureInfo.InvariantCulture)).Append('|')
                   .Append(v.Low ? 1 : 0).Append('|')
                   .Append(v.Rice ? 1 : 0).Append('|')
                   .Append(v.Ratio.ToString("0.###", CultureInfo.InvariantCulture)).Append('|')
@@ -2353,6 +2425,13 @@ namespace GluttonBalance
                     v.Currency = string.IsNullOrEmpty(res.Currency) ? "CNY" : res.Currency;
                     v.Low = res.Ok && rt.Cfg.Threshold.HasValue && res.Amount < rt.Cfg.Threshold.Value;
                 }
+                // v22 网络瞬断韧性：失败不清空金额——10 分钟窗口内保留最后一次成功值（灰字=非实时）
+                v.HasLastGood = rt.LastGoodMs > 0;
+                v.LastGoodAmount = rt.LastGoodAmount;
+                v.LastGoodCurrency = string.IsNullOrEmpty(rt.LastGoodCurrency) ? "CNY" : rt.LastGoodCurrency;
+                v.LastGoodMs = rt.LastGoodMs;
+                v.ShowLastGood = res != null && !res.Ok && rt.LastGoodMs > 0
+                    && (NowMs - rt.LastGoodMs) <= LastGoodWindowMs;
                 if (v.Rice)
                 {
                     v.HasResult = true;
@@ -2364,6 +2443,12 @@ namespace GluttonBalance
                 {
                     double full = v.FullAmount > 0.01 ? v.FullAmount : 100.0;
                     v.Ratio = Math.Max(0, Math.Min(1, v.Amount / full));
+                }
+                else if (v.ShowLastGood)
+                {
+                    // 失败但仍在保留窗口内：米饭量沿用上次成功金额（不因失败清零）
+                    double full = v.FullAmount > 0.01 ? v.FullAmount : 100.0;
+                    v.Ratio = Math.Max(0, Math.Min(1, v.LastGoodAmount / full));
                 }
                 else v.Ratio = 0;
                 list.Add(v);

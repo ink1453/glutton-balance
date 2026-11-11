@@ -1243,27 +1243,91 @@ namespace GluttonBalance
         }
     }
 
+    /// <summary>
+    /// v22 字体清晰度修复：2× 超采样光栅工装。
+    /// 做法：按 2 倍像素新建位图 + <c>Graphics.ScaleTransform(2,2)</c>，内部全部按「逻辑坐标」绘制，
+    /// 最后用高质量双三次 + TileFlipXY 降采样回原尺寸；等价于 Mac Retina 2× 的渲染再缩回 1×。
+    /// 约束：只影响像素光栅质量，绝不改任何布局/几何数值——窗口尺寸与 --selftest 的所有几何数字保持原样。
+    /// </summary>
+    internal static class RasterScale
+    {
+        /// <summary>超采样倍率（固定 2×：8–13px 小字的笔画/抗锯齿在 2× 下绘制后缩回最均匀）。</summary>
+        internal const int Supersample = 2;
+
+        /// <summary>让 Graphics 进入「逻辑坐标」绘制模式：之后所有坐标/字号仍按原尺寸写，实际落在 2 倍像素上。</summary>
+        internal static void BeginScaled(Graphics g)
+        {
+            if (g != null) g.ScaleTransform(Supersample, Supersample);
+        }
+
+        /// <summary>
+        /// 把 2× 超采样位图高质量降采样到 w×h（预乘 alpha 保持 Format32bppPArgb，UpdateLayeredWindow 需要）。
+        /// TileFlipXY 让边缘采样按「平铺翻转」取色，避免透明边缘出现黑边/白边。
+        /// 任何异常都兜底返回一张正确尺寸的空位图（宁可全透明也不能让窗口/缓存拿到错误尺寸）。
+        /// </summary>
+        internal static Bitmap Downscale(Bitmap src, int w, int h)
+        {
+            if (w < 1) w = 1;
+            if (h < 1) h = 1;
+            if (src == null) return new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+            Bitmap dst = null;
+            try
+            {
+                dst = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+                using (Graphics g = Graphics.FromImage(dst))
+                {
+                    g.CompositingMode = CompositingMode.SourceCopy;
+                    g.CompositingQuality = CompositingQuality.HighQuality;
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.SmoothingMode = SmoothingMode.None;
+                    using (ImageAttributes ia = new ImageAttributes())
+                    {
+                        ia.SetWrapMode(WrapMode.TileFlipXY);
+                        g.DrawImage(src, new Rectangle(0, 0, w, h), 0, 0, src.Width, src.Height, GraphicsUnit.Pixel, ia);
+                    }
+                }
+                return dst;
+            }
+            catch
+            {
+                if (dst != null) { try { dst.Dispose(); } catch { } }
+                return new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+            }
+        }
+    }
+
     /// <summary>精灵渲染：碗 PNG 拉伸 + 11 档米饭位图 + 三种柔和数值样式 + 轮子彩蛋。</summary>
     internal static class BowlRenderer
     {
         public static Bitmap Render(Config cfg, ProviderView[] views, BowlLayout lay, VisualStyle style, float dpiScale)
         {
             if (lay.GroupW < 1 || lay.GroupH < 1) return new Bitmap(1, 1, PixelFormat.Format32bppPArgb);
-            Bitmap bmp = new Bitmap(lay.GroupW, lay.GroupH, PixelFormat.Format32bppPArgb);
-            using (Graphics g = Graphics.FromImage(bmp))
+            // v22：2× 超采样绘制（位图放大 2 倍、按逻辑坐标画），最后降采样回原尺寸；布局数字不变
+            int ss = RasterScale.Supersample;
+            Bitmap hi = new Bitmap(lay.GroupW * ss, lay.GroupH * ss, PixelFormat.Format32bppPArgb);
+            try
             {
-                Prepare(g);
-                g.Clear(Color.Transparent);
-                // 要求：桶底不要明显投影（去掉组底黑影）
-
-                for (int i = 0; i < lay.Slots.Count; i++)
+                using (Graphics g = Graphics.FromImage(hi))
                 {
-                    BowlSlot slot = lay.Slots[i];
-                    ProviderView v = (slot.Index >= 0 && slot.Index < views.Length) ? views[slot.Index] : null;
-                    DrawSlot(g, cfg, lay, slot, v, style, dpiScale);
+                    Prepare(g);
+                    g.Clear(Color.Transparent);
+                    // 要求：桶底不要明显投影（去掉组底黑影）
+                    RasterScale.BeginScaled(g);
+
+                    for (int i = 0; i < lay.Slots.Count; i++)
+                    {
+                        BowlSlot slot = lay.Slots[i];
+                        ProviderView v = (slot.Index >= 0 && slot.Index < views.Length) ? views[slot.Index] : null;
+                        DrawSlot(g, cfg, lay, slot, v, style, dpiScale);
+                    }
                 }
+                return RasterScale.Downscale(hi, lay.GroupW, lay.GroupH);
             }
-            return bmp;
+            finally
+            {
+                hi.Dispose();
+            }
         }
 
         private static void Prepare(Graphics g)
@@ -1309,11 +1373,17 @@ namespace GluttonBalance
                     float baseY = rimBottomG - 2f;                          // 米饭基准：前沿线最低点上 2px
                     if (baseY > bowlBottom) baseY = bowlBottom;
                     float surface = baseY - fill * maxOverflow;             // fill≥0.8 时溢出 ≥36% 前脸
-                    Bitmap rice = RiceCache.GetMound(a != null ? a.Id : "black", level, slot.RiceW);
+                    // v22：米饭资源按 2× 宽度取（RiceCache 的缓存键含宽度），再按「逻辑尺寸」画回 2× 画布，
+                    // 最后随整图降采样 → 米堆边缘/米粒细节比 1× 直接缩小更干净。
+                    int ss = RasterScale.Supersample;
+                    Bitmap rice = RiceCache.GetMound(a != null ? a.Id : "black", level, slot.RiceW * ss);
                     if (rice != null)
                     {
-                        int dy = (int)Math.Round(surface);
-                        g.DrawImageUnscaled(rice, slot.RiceX, dy);
+                        // dy 仍在逻辑坐标里对齐到 1/ss 像素（保留原先「对齐像素网格」的意图）
+                        float dy = (float)Math.Round(surface * ss) / ss;
+                        float rw = rice.Width / (float)ss;
+                        float rh = rice.Height / (float)ss;
+                        g.DrawImage(rice, new RectangleF(slot.RiceX, dy, rw, rh));
                     }
                 }
             }
@@ -1336,7 +1406,7 @@ namespace GluttonBalance
             float namePx = Math.Max(8.0f, 8.0f * scale);   // 可读下限：家名 ≥8px
             float valPx = Math.Max(9.0f, 9.0f * scale);
             string name = v.Name ?? "";
-            string val = ValueText(v);
+            string val = BalanceText(v);
             bool lightBody = a != null && a.LightBody;
             Color nameCol, valCol, shadowCol, dot;
             LabelColors(cfg, v, a, style, out nameCol, out valCol, out shadowCol, out dot);
@@ -1728,7 +1798,7 @@ namespace GluttonBalance
         {
             FlagMetrics f = new FlagMetrics();
             f.NameText = v != null ? (v.Name ?? "") : "";
-            f.ValText = v != null ? ValueText(v) : "";
+            f.ValText = v != null ? BalanceText(v) : "";
             f.BaseNamePx = Math.Max(8f, 8f * scale);
             f.BaseValPx = Math.Max(9f, 9f * scale);
             float cx = slot.X + slot.BowlW / 2f;
@@ -1798,7 +1868,7 @@ namespace GluttonBalance
             Color nameCol, valCol, shadowCol, dotCol;
             LabelColors(cfg, v, a, style, out nameCol, out valCol, out shadowCol, out dotCol);
             m.NameText = v.Name ?? "";
-            m.ValText = ValueText(v);
+            m.ValText = BalanceText(v);
             using (Bitmap mb = new Bitmap(4, 4))
             using (Graphics mg = Graphics.FromImage(mb))
             {
@@ -2249,12 +2319,31 @@ namespace GluttonBalance
             }
         }
 
+        /// <summary>
+        /// v22 显示用余额文案（网络瞬断韧性 + 字体修复后的统一入口）：
+        /// 成功 → 实时金额；失败但 10 分钟内有过成功值（ShowLastGood）→ 上次成功金额（灰字=非实时）；否则「连接失败」。
+        /// 渲染（L1/L2/L3/明细）与 --selftest 度量共用本函数，保证测试与绘制同源。
+        /// </summary>
+        public static string BalanceText(ProviderView v)
+        {
+            if (v == null) return "连接失败";
+            if (v.Rice) return "满满一盆";
+            if (v.Ok) return AmountText(v.Currency, v.Amount);
+            if (v.ShowLastGood) return AmountText(v.LastGoodCurrency, v.LastGoodAmount);
+            return "连接失败";
+        }
+
+        /// <summary>金额格式（币种符号 + 两位小数；USD 用 $，其余一律 ¥，保持旧口径）。</summary>
+        private static string AmountText(string currency, double amount)
+        {
+            string symbol = string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : "¥";
+            return symbol + amount.ToString("0.00", CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>旧名保留（内部/外部调用点兼容）：现在直接走 BalanceText，行为包含「上次成功金额灰字」口径。</summary>
         public static string ValueText(ProviderView v)
         {
-            if (v.Rice) return "满满一盆";
-            if (!v.HasResult || !v.Ok) return "连接失败";
-            string symbol = string.Equals(v.Currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : "¥";
-            return symbol + v.Amount.ToString("0.00", CultureInfo.InvariantCulture);
+            return BalanceText(v);
         }
 
         // ---------------- 轮子 ----------------
@@ -2372,87 +2461,98 @@ namespace GluttonBalance
         {
             int w, h;
             Measure(cfg, views.Length, scale, lay, out w, out h);
-            Bitmap bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
-            using (Graphics g = Graphics.FromImage(bmp))
+            // v22：同 BowlRenderer 的 2× 超采样——内部全部按逻辑坐标绘制，最后一律降采样回 w×h；
+            // 明细卡的外框尺寸/行高/文字坐标都不变（Measure 的数字保持原样）。
+            int ss = RasterScale.Supersample;
+            Bitmap hi = new Bitmap(w * ss, h * ss, PixelFormat.Format32bppPArgb);
+            try
             {
-                g.SmoothingMode = SmoothingMode.AntiAlias;
-                g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                g.Clear(Color.Transparent);
-                float rad = BowlLayout.ScaleI(10, scale);
-                using (GraphicsPath path = BowlRenderer.RoundedRect(0.5f, 0.5f, w - 1f, h - 1f, rad))
+                using (Graphics g = Graphics.FromImage(hi))
                 {
-                    using (SolidBrush b = new SolidBrush(style.CardFill))
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.Clear(Color.Transparent);
+                    RasterScale.BeginScaled(g);
+                    float rad = BowlLayout.ScaleI(10, scale);
+                    using (GraphicsPath path = BowlRenderer.RoundedRect(0.5f, 0.5f, w - 1f, h - 1f, rad))
                     {
-                        g.FillPath(b, path);
-                    }
-                    using (Pen p = new Pen(style.CardBorder, Math.Max(1f, scale)))
-                    {
-                        g.DrawPath(p, path);
-                    }
-                }
-                float pad = BowlLayout.ScaleI(12, scale);
-                Font headFont = V3Fonts.Get(11f * scale, FontStyle.Bold);
-                Font rowFont = V3Fonts.Get(10.5f * scale, FontStyle.Regular);
-                Font subFont = V3Fonts.Get(8.5f * scale, FontStyle.Regular);
-                Font rowBold = V3Fonts.Get(11f * scale, FontStyle.Bold);
-                using (SolidBrush b = new SolidBrush(style.AmountColor))
-                {
-                    g.DrawString("余额明细 · 点击面板收起", headFont, b, pad, pad * 0.8f);
-                }
-                float y = BowlLayout.ScaleI(34, scale);
-                float rowH = BowlLayout.ScaleI(30, scale);
-                for (int i = 0; i < views.Length; i++)
-                {
-                    ProviderView v = views[i];
-                    Color dot = v.Rice ? style.DotRice : (!v.HasResult || !v.Ok ? style.DotGrey : (v.Low ? style.DotRed : style.DotGreen));
-                    using (SolidBrush db = new SolidBrush(dot))
-                    {
-                        g.FillEllipse(db, pad, y + rowH * 0.34f, Math.Max(5f, 6f * scale), Math.Max(5f, 6f * scale));
-                    }
-                    using (SolidBrush b = new SolidBrush(style.AmountColor))
-                    {
-                        g.DrawString(v.Name, rowFont, b, pad + BowlLayout.ScaleI(14, scale), y + rowH * 0.06f);
-                    }
-                    using (SolidBrush vc = new SolidBrush(v.Rice ? style.DotRice : (!v.HasResult || !v.Ok ? style.FailColor : (v.Low ? style.LowColor : style.AmountColor))))
-                    {
-                        using (StringFormat rf = new StringFormat())
+                        using (SolidBrush b = new SolidBrush(style.CardFill))
                         {
-                            rf.Alignment = StringAlignment.Far;
-                            rf.FormatFlags = StringFormatFlags.NoWrap;
-                            g.DrawString(BowlRenderer.ValueText(v), rowBold, vc, new RectangleF(pad, y + rowH * 0.04f, w - pad * 2f, rowH * 0.5f), rf);
+                            g.FillPath(b, path);
+                        }
+                        using (Pen p = new Pen(style.CardBorder, Math.Max(1f, scale)))
+                        {
+                            g.DrawPath(p, path);
                         }
                     }
-                    string sub;
-                    if (v.Rice) sub = "大白饭档 · 不联网 · 永远满满一盆";
-                    else
+                    float pad = BowlLayout.ScaleI(12, scale);
+                    Font headFont = V3Fonts.Get(11f * scale, FontStyle.Bold);
+                    Font rowFont = V3Fonts.Get(10.5f * scale, FontStyle.Regular);
+                    Font subFont = V3Fonts.Get(8.5f * scale, FontStyle.Regular);
+                    Font rowBold = V3Fonts.Get(11f * scale, FontStyle.Bold);
+                    using (SolidBrush b = new SolidBrush(style.AmountColor))
                     {
-                        string thr = double.IsNaN(v.Threshold) ? "无" : ("¥" + v.Threshold.ToString("0.##", CultureInfo.InvariantCulture));
-                        string last;
-                        if (v.LastOkMs >= 0) last = "成功";
-                        else if (v.LastAttemptMs >= 0) last = "失败";
-                        else last = "等待刷新";
-                        sub = "阈值 " + thr + " · 每 " + v.IntervalSec + "s 刷新 · 最近 " + last;
+                        g.DrawString("余额明细 · 点击面板收起", headFont, b, pad, pad * 0.8f);
+                    }
+                    float y = BowlLayout.ScaleI(34, scale);
+                    float rowH = BowlLayout.ScaleI(30, scale);
+                    for (int i = 0; i < views.Length; i++)
+                    {
+                        ProviderView v = views[i];
+                        Color dot = v.Rice ? style.DotRice : (!v.HasResult || !v.Ok ? style.DotGrey : (v.Low ? style.DotRed : style.DotGreen));
+                        using (SolidBrush db = new SolidBrush(dot))
+                        {
+                            g.FillEllipse(db, pad, y + rowH * 0.34f, Math.Max(5f, 6f * scale), Math.Max(5f, 6f * scale));
+                        }
+                        using (SolidBrush b = new SolidBrush(style.AmountColor))
+                        {
+                            g.DrawString(v.Name, rowFont, b, pad + BowlLayout.ScaleI(14, scale), y + rowH * 0.06f);
+                        }
+                        using (SolidBrush vc = new SolidBrush(v.Rice ? style.DotRice : (!v.HasResult || !v.Ok ? style.FailColor : (v.Low ? style.LowColor : style.AmountColor))))
+                        {
+                            using (StringFormat rf = new StringFormat())
+                            {
+                                rf.Alignment = StringAlignment.Far;
+                                rf.FormatFlags = StringFormatFlags.NoWrap;
+                                g.DrawString(BowlRenderer.BalanceText(v), rowBold, vc, new RectangleF(pad, y + rowH * 0.04f, w - pad * 2f, rowH * 0.5f), rf);
+                            }
+                        }
+                        string sub;
+                        if (v.Rice) sub = "大白饭档 · 不联网 · 永远满满一盆";
+                        else
+                        {
+                            string thr = double.IsNaN(v.Threshold) ? "无" : ("¥" + v.Threshold.ToString("0.##", CultureInfo.InvariantCulture));
+                            string last;
+                            if (v.LastOkMs >= 0) last = "成功";
+                            else if (v.LastAttemptMs >= 0) last = "失败";
+                            else last = "等待刷新";
+                            sub = "阈值 " + thr + " · 每 " + v.IntervalSec + "s 刷新 · 最近 " + last;
+                        }
+                        using (SolidBrush b = new SolidBrush(style.HintColor))
+                        {
+                            g.DrawString(sub, subFont, b, pad + BowlLayout.ScaleI(14, scale), y + rowH * 0.56f);
+                        }
+                        if (i + 1 < views.Length)
+                        {
+                            using (Pen dp = new Pen(style.CardDivider, Math.Max(0.5f, scale * 0.7f)))
+                            {
+                                g.DrawLine(dp, pad, y + rowH - 1f, w - pad, y + rowH - 1f);
+                            }
+                        }
+                        y += rowH;
                     }
                     using (SolidBrush b = new SolidBrush(style.HintColor))
                     {
-                        g.DrawString(sub, subFont, b, pad + BowlLayout.ScaleI(14, scale), y + rowH * 0.56f);
+                        g.DrawString("窗口置顶 · 点击面板收起", subFont, b, pad, h - BowlLayout.ScaleI(20, scale));
                     }
-                    if (i + 1 < views.Length)
-                    {
-                        using (Pen dp = new Pen(style.CardDivider, Math.Max(0.5f, scale * 0.7f)))
-                        {
-                            g.DrawLine(dp, pad, y + rowH - 1f, w - pad, y + rowH - 1f);
-                        }
-                    }
-                    y += rowH;
                 }
-                using (SolidBrush b = new SolidBrush(style.HintColor))
-                {
-                    g.DrawString("窗口置顶 · 点击面板收起", subFont, b, pad, h - BowlLayout.ScaleI(20, scale));
-                }
+                return RasterScale.Downscale(hi, w, h);
             }
-            return bmp;
+            finally
+            {
+                hi.Dispose();
+            }
         }
     }
 
@@ -2464,7 +2564,7 @@ namespace GluttonBalance
             return BuildViews(n, cfg, null);
         }
 
-        /// <summary>演示数据；state=normal/low/offline/rice 覆盖第一家的状态（出图三态抽样用，不写 config）。</summary>
+        /// <summary>演示数据；state=normal/low/offline/stale/rice 覆盖第一家的状态（出图状态抽样用，不写 config）。</summary>
         public static ProviderView[] BuildViews(int n, Config cfg, string state)
         {
             if (n < 1) n = 1;
@@ -2490,6 +2590,31 @@ namespace GluttonBalance
                 ds.IntervalSec = 60;
                 ds.LastAttemptMs = 0;
                 ds.LastOkMs = -1;
+                list.Add(ds);
+            }
+            else if (st == "stale")
+            {
+                // v22 网络瞬断韧性：本次查询失败（HasResult=true, Ok=false），但 2 分钟前成功过（在 10 分钟窗口内）
+                // → 应显示上次成功金额 487.35 的灰字 + 灰点 + 米饭量按上次金额保留（不是「连接失败」）。
+                ProviderView ds = new ProviderView();
+                ds.Id = "deepseek";
+                ds.Name = "DeepSeek";
+                ds.HasResult = true;
+                ds.Ok = false;
+                ds.Amount = 0;
+                ds.Currency = "CNY";
+                ds.FullAmount = 500;
+                ds.Threshold = 5;
+                ds.IntervalSec = 60;
+                ds.LastAttemptMs = 0;
+                ds.LastOkMs = 0;
+                ds.HasLastGood = true;
+                ds.ShowLastGood = true;
+                ds.LastGoodAmount = 487.35;
+                ds.LastGoodCurrency = "CNY";
+                // 仅出图：-120s 语义（时间基准只影响窗口判定，画出图不依赖）
+                ds.LastGoodMs = Environment.TickCount - 120000;
+                ds.Ratio = Math.Max(0, Math.Min(1, 487.35 / 500));
                 list.Add(ds);
             }
             else if (st == "rice")

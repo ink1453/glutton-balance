@@ -40,7 +40,7 @@ APP_SRC="${APP_SRC:-$PROJECT_ROOT}"
 OUT="${OUT:-$BUILD_DIR/dist/饭桶余额.app}"
 APP_NAME="饭桶余额"
 # 发布版本：与 app-mac/package.json / repo/mac/package.json 保持同号（发布新版改这一处）
-APP_VERSION="0.0.5"
+APP_VERSION="0.0.6"
 # bundle id：必须与已安装 App / LaunchAgent / 文档一致（2026-11-02 改名定稿：glutton-balance）
 APP_BUNDLE_ID="com.gluttonbalance.panel"
 # 签名身份：老板 2026-11-01 定的硬规矩——打包/重签一律用本机自签证书，不再用 ad-hoc（-）

@@ -274,8 +274,6 @@
       moundCacheCount = 0;
       frameCache = Object.create(null);
       frameCacheCount = 0;
-      masterTipCache = Object.create(null);
-      masterTipCount = 0;
       startPreload();
     }
     return changed || masterChanged;
@@ -756,24 +754,22 @@
   }
 
   // -------------------------------------------------------------------------
-  // 第 6 轮 A3 · #3 P1 米饭口径（改代码，不动资产）
-  //   旧口径：master（rice-master.png）整堆优先 → 满盆可见米高 20.25pt，米山整堆上移盖住桶口内壁
-  //   新口径：① 非满盆按档位取 rice-00..10 帧（400×320，等比缩到宽 riceW、高 riceW×0.8），
-  //             米尖位置 = rimBottom-2 - fill×米尖行程（线性/单调，满盆可见米高回到帧口径 ≈11.6pt）；
-  //           ② master 只在 fill≥0.995「满盆溢出」时取顶部 30% 作为溢出的堆尖叠加，其余档位不参与；
-  //           ③ 帧缺失（自定义/残缺素材）时才退回 master 整堆兜底，保证不空白。
+  // 米饭口径（2026-11-10 热修 · 对齐 Win BowlRenderer.DrawSlot）
+  //   旧口径（第 6 轮 A3）：11 档帧「内容顶贴米尖线」，米尖行程只有 0.236×前脸 →
+  //     Mac 上米饭只露出帧的一道小尖，视觉「稀、少」，与 Win 明显不一致（老板 2026-11-10 反馈）。
+  //   现行：rice-master 整堆按 fill 平移（= Win 口径）——
+  //     surface = (rimBottom-2) - fill × (0.45 × frontFace)，整堆等比缩到宽 riceW
+  //     （高 = 263/400 × riceW），顶边贴 surface、下缘被前层自然盖住；
+  //     满盆米山高出桶沿 45% 前脸（突出饱满），低余额米山随 fill 平滑下沉。
+  //   11 档帧只在 rice-master 缺失（自定义/残缺素材）时兜底，保证米饭不空白。
   // -------------------------------------------------------------------------
-  var RICE_TIP_TRAVEL = 0.236;     // 米尖行程 = 0.236×frontFace（满盆可见米高 ≈11.6pt，对齐旧 11 档帧口径；master 口径为 0.45）
-  var RICE_OVERFLOW_RATIO = 0.995; // fill≥0.995 视为满盆溢出（才用 master 堆尖）
-  var RICE_TIP_WIDTH_RATIO = 0.30; // 溢出堆尖宽 = 0.30×riceW（只做小堆尖，保证米尖随 fill 仍近似线性）
-  var RICE_MASTER_TIP_CROP = 0.15; // master 只取顶部 15% 作为满盆溢出的小堆尖
+  var RICE_MAX_OVERFLOW = 0.45;    // 米山行程 = 0.45×前脸（Win 口径；旧帧口径 0.236）
+  var RICE_FRAME_TIP_TRAVEL = 0.236; // 兜底帧口径的米尖行程（仅 master 缺失时用）
 
   var frameCache = Object.create(null);
   var frameCacheCount = 0;
-  var masterTipCache = Object.create(null);
-  var masterTipCount = 0;
 
-  /** 取第 level 档米饭帧的缩放画布（400×320 → 宽 w、高 w×0.8），并量出内容顶（用于「内容顶贴米尖」锚定）。 */
+  /** 取第 level 档米饭帧的缩放画布（400×320 → 宽 w、高 w×0.8），并量出内容顶（兜底路径用）。 */
   function getRiceFrame(level, w, dpr) {
     var f = riceFrames[level];
     if (!f || !f.img) return null;
@@ -791,7 +787,6 @@
     g.imageSmoothingEnabled = true;
     g.imageSmoothingQuality = 'high';
     try { g.drawImage(f.img, 0, 0, c.width, c.height); } catch (e) { return null; }
-    // 内容顶 = 第一行 alpha>16 的位置（帧内容底贴画布底；用于把「内容顶」对到米尖）
     var contentTopPx = 0;
     try {
       var data = g.getImageData(0, 0, c.width, c.height).data;
@@ -807,31 +802,7 @@
     return out;
   }
 
-  /** 满盆溢出堆尖：只取 master 顶部 ratio 部分、等比缩到宽 w（仅 fill≥0.995 用）。 */
-  function getMasterTip(ratio, w, dpr) {
-    if (!riceMaster || !riceMaster.img) return null;
-    w = Math.max(4, Math.round(w));
-    var sw = riceMaster.img.naturalWidth || riceMaster.w || 400;
-    var sh = riceMaster.img.naturalHeight || riceMaster.h || 263;
-    var cut = Math.max(2, Math.round(sh * ratio));
-    var h = Math.max(2, Math.round(cut * w / sw));
-    var key = 't' + ratio.toFixed(3) + '|' + w + '|' + dpr;
-    var hit = masterTipCache[key];
-    if (hit) return hit;
-    var c = document.createElement('canvas');
-    c.width = Math.max(1, Math.round(w * dpr));
-    c.height = Math.max(1, Math.round(h * dpr));
-    var g = c.getContext('2d');
-    g.imageSmoothingEnabled = true;
-    g.imageSmoothingQuality = 'high';
-    try { g.drawImage(riceMaster.img, 0, 0, sw, cut, 0, 0, c.width, c.height); } catch (e) { return null; }
-    var out = { canvas: c, w: w, h: h };
-    if (masterTipCount > 64) { masterTipCache = Object.create(null); masterTipCount = 0; }
-    masterTipCache[key] = out; masterTipCount++;
-    return out;
-  }
-
-  /** 兜底（仅缺帧时）：master 按目标宽等比整堆（旧口径），避免自定义/残缺素材时米饭空白。 */
+  /** rice-master 整堆按目标宽等比缩放（Win：高 = 263/400×w），60fps 只 blit。 */
   function getMoundCanvas(level, w, dpr) {
     if (!riceMaster || !riceMaster.img) return null;
     w = Math.max(8, Math.round(w));
@@ -852,7 +823,7 @@
     return c;
   }
 
-  /** 米饭段（第 6 轮 A3 · P1 帧口径）：11 档帧按 fill 取用 + 满盆溢出堆尖（master 仅在溢出用）+ P0-F 微调。 */
+  /** 米饭段：rice-master 整堆按 fill 平移（Win 口径）+ master 缺失时 11 档帧兜底。 */
   function drawRice(ctx, state, bowl, slot, view, dpr, scale) {
     if (!view) return;
     var rice = !!view.rice;
@@ -867,76 +838,47 @@
     var bottom = slot.bottom;
     var frontFace = isNum(plaque.frontFace) ? plaque.frontFace : maxNum(4, bottom - rimBottom);
     if (frontFace < 4) frontFace = 4;
-    var maxOverflow = 0.45 * frontFace;          // 旧 master 口径的整堆行程（仅兜底时用）
-    var baseY = rimBottom - 2;                    // 空盆米面基准（与旧口径同一基准线）
+    var baseY = rimBottom - 2;                     // 空盆米面基准（沿前沿线）
     if (baseY > bottom) baseY = bottom;
-    var surface = baseY - fill * maxOverflow;    // 兜底：旧 master 口径的整堆位置
+    var surface = baseY - fill * (RICE_MAX_OVERFLOW * frontFace); // 米山顶边
     var riceW = numOr(slot.riceW, Math.round(slot.bowlW * 0.55));
 
-    var frame = getRiceFrame(level, riceW, dpr);
-    if (frame) {
-      // #3 P1：米尖位置 = 基准线 - fill×米尖行程（线性/单调；满盆可见米高回到 11 档帧口径 ≈11.6pt）
-      var tipY = baseY - fill * (RICE_TIP_TRAVEL * frontFace);
-      if (tipY > rimBottom) tipY = rimBottom;
-      var shrink = fill >= RICE_OVERFLOW_RATIO ? 0.962 : 1; // P0-F：满盆收窄 3.8% 露出桶口内壁
-      var drawW = frame.w * shrink;
-      var drawX = slot.riceX + (frame.w - drawW) / 2;
-      var drawY = tipY - frame.contentTop * shrink;         // 帧内容顶贴到米尖线；内容底被前层自然盖住
+    var mound = getMoundCanvas(level, riceW, dpr);
+    if (mound) {
+      var dw = mound.width / dpr, dh = mound.height / dpr;   // dw == riceW（等比缩放画布）
       ctx.save();
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'high';
-      try { ctx.drawImage(frame.canvas, Math.round(drawX), Math.round(drawY), drawW, frame.h * shrink); } catch (e) { /* ignore */ }
-      // 满盆溢出：只有 fill≥0.995 才用 master 顶部 30% 画堆尖（其余档位 master 完全不参与）
-      if (fill >= RICE_OVERFLOW_RATIO) {
-        var tip = getMasterTip(RICE_MASTER_TIP_CROP, Math.round(riceW * RICE_TIP_WIDTH_RATIO), dpr);
-        if (tip) {
-          var tw = tip.w * shrink, th = tip.h * shrink;
-          var tcx = slot.riceX + riceW / 2;
-          try { ctx.drawImage(tip.canvas, Math.round(tcx - tw / 2), Math.round(tipY - th + 0.8 * scale), tw, th); } catch (e) { /* ignore */ }
-        }
-      }
-      // P0-F：米堆与桶沿的接触阴影 + 左右内壁暗边（带按桶沿线，随新米面收窄）
-      if (scale > 0) {
+      try { ctx.drawImage(mound, Math.round(slot.riceX), Math.round(surface), dw, dh); } catch (e) { /* ignore */ }
+      ctx.restore();
+      return;
+    }
+
+    // 兜底：master 缺失（自定义/残缺素材）→ 11 档帧，内容顶贴米尖线（旧帧口径）
+    var frame = getRiceFrame(level, riceW, dpr);
+    if (frame) {
+      var tipY = baseY - fill * (RICE_FRAME_TIP_TRAVEL * frontFace);
+      if (tipY > rimBottom) tipY = rimBottom;
+      var drawX2 = slot.riceX;
+      var drawY2 = tipY - frame.contentTop;
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      try { ctx.drawImage(frame.canvas, Math.round(drawX2), Math.round(drawY2), frame.w, frame.h); } catch (e) { /* ignore */ }
+      // P0-F：米堆与桶沿接触阴影
+      if (scale > 0 && rimBottom > tipY + 0.5 * scale) {
         var cTop = Math.max(tipY + 0.5 * scale, rimBottom - 4.2 * scale);
         if (rimBottom > cTop) {
           var grd = ctx.createLinearGradient(0, cTop, 0, rimBottom + 0.4 * scale);
           grd.addColorStop(0, 'rgba(0,0,0,0)');
           grd.addColorStop(1, css(t.contactShadow));
+          ctx.save();
           ctx.fillStyle = grd;
-          ctx.fillRect(drawX - 0.5, cTop, drawW + 1, rimBottom + 0.4 * scale - cTop);
-        }
-        var edgeW = Math.max(1, 1.3 * scale);
-        var sideTop = Math.max(tipY + 0.5 * scale, rimBottom - 3.2 * scale);
-        if (rimBottom > sideTop) {
-          var gl = ctx.createLinearGradient(drawX, 0, drawX + edgeW, 0);
-          gl.addColorStop(0, css(t.contactShadow));
-          gl.addColorStop(1, 'rgba(0,0,0,0)');
-          ctx.fillStyle = gl;
-          ctx.fillRect(drawX, sideTop, edgeW, rimBottom - sideTop);
-          var gr = ctx.createLinearGradient(drawX + drawW - edgeW, 0, drawX + drawW, 0);
-          gr.addColorStop(0, 'rgba(0,0,0,0)');
-          gr.addColorStop(1, css(t.contactShadow));
-          ctx.fillStyle = gr;
-          ctx.fillRect(drawX + drawW - edgeW, sideTop, edgeW, rimBottom - sideTop);
+          ctx.fillRect(drawX2 - 0.5, cTop, frame.w + 1, rimBottom + 0.4 * scale - cTop);
+          ctx.restore();
         }
       }
-      ctx.restore();
-      return;
     }
-
-    // 兜底：帧资产缺失（自定义/残缺素材）→ 退回旧 master 整堆，保证米饭不空白
-    var mound = getMoundCanvas(level, riceW, dpr);
-    if (!mound) return;
-    var dw = mound.width / dpr;
-    var dh = mound.height / dpr;
-    var shrink2 = fill >= RICE_OVERFLOW_RATIO ? 0.962 : 1;
-    var drawW2 = dw * shrink2;
-    var drawX2 = slot.riceX + (dw - drawW2) / 2;
-    ctx.save();
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    try { ctx.drawImage(mound, drawX2, Math.round(surface), drawW2, dh); } catch (e) { /* ignore */ }
-    ctx.restore();
   }
 
   /** Win BowlRenderer.DrawWheel：轮胎 + 轮毂 + 3 辐条 + 不对称亮片。 */

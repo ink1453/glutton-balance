@@ -19,7 +19,7 @@ const logger = require('./src/logger');
 
 const APP_ROOT = __dirname;
 const APP_NAME = '饭桶余额';
-const APP_VERSION = '0.0.5';
+const APP_VERSION = '0.0.6';
 const ASSETS_DIR = path.join(APP_ROOT, 'assets');
 const RENDERER_HTML = process.env.PBP_RENDERER || path.join(APP_ROOT, 'renderer', 'index.html');
 const PRELOAD = path.join(APP_ROOT, 'preload.js');
@@ -60,7 +60,9 @@ let configPathUsed = '';
 let demoMode = false;
 let assets = { map: {}, order: [] };
 let assetSignature = '';
-let petScale = 1.05;
+let petScale = 1.05;        // Coopanion /api/state 的桌宠大小（用户设置；pollPetState 每 500ms 刷新）
+let petScaleKnown = false;   // 是否拿到过真实 /api/state 读数（false 时权威门控不启用，避免默认值误判）
+let petFigure = '';          // 桌宠当前皮肤 figure（换皮肤也属于「用户改设置」，允许重定基准）
 let themeState = { theme: 'dark', palettes: null, style: null };
 let locator = null;
 let providerMgr = null;
@@ -91,12 +93,25 @@ let lastDisplayId = null;      // 上次所在显示器 id（跨屏时 snap + �
 // 第 11 轮丁路：桌宠生命周期跟随 —— 桌宠消失 ≥5s 隐藏显示窗，检测恢复后自动显示
 let appStartedAt = Date.now();       // 进程启动时间（启动宽限判据）
 let petMissingSince = 0;             // 桌宠连续缺失起点 ms（0=当前有桌宠）
+let probeWatchLines = -1;            // 看门狗：上次看到的 petprobe 行号
+let probeWatchAdvanceAt = 0;         // 看门狗：行号最近一次推进的时刻 ms
+let probeRestartCount = 0;           // 看门狗：本进程重启探针次数（退避用）
+let probeNextRestartAt = 0;          // 看门狗：下一次允许重启的时刻 ms（退避）
+let probeStaleLogged = false;        // 看门狗：本轮挂死的 begin 日志只写一次
 let noPetHidden = false;             // 是否因桌宠缺失而隐藏了显示窗
-const NO_PET_HIDE_MS = 5000;         // 桌宠消失多久后隐藏显示窗
+const NO_PET_HIDE_MS = 5000;         // 桌宠消失多久后隐藏显示窗（0.0.6 起 5s 兜底改为 30s 探针死透才隐藏，见 PROBE_DEAD_HIDE_MS）
 const NO_PET_STARTUP_GRACE_MS = 10000; // 启动宽限：启动后 10s 内不因桌宠缺失而隐藏
 // 第 21 轮甲路：桌宠「窗口存在性」快路径 —— 窗口连续缺失 ≥600ms（125ms×4~5 帧去抖）立即隐藏，
 // 不再等 5s 兜底；capture-error 带 wid = 窗口还在，不计缺失（不拿扫描新鲜度代替窗口存在性）。
 const PET_WINDOW_HIDE_MS = 600;
+// 0.0.6 探针看门狗 + 「隐藏」判定修正（真机日志证据：打游戏时 petprobe 行号 3 分钟不推进、进程 0% CPU 挂死，
+// 旧逻辑 5s 后把面板隐藏、且探针永远不重启 → 面板一直不回来）：
+//   ① 行号超过 PROBE_STALE_RESTART_MS 不推进 → 重启 petprobe（指数退避 6s→12s→…→60s，日志留痕）；
+//   ② 「定位失败」不再在 5s 就隐藏：探针挂死是探针自己的事，面板应原地保持；
+//      只有探针信号持续未知 PROBE_DEAD_HIDE_MS（30s）仍救不回来才隐藏（窗口真消失走 600ms 快路径，不受影响）。
+const PROBE_STALE_RESTART_MS = 6000;
+const PROBE_RESTART_BACKOFF_MAX_MS = 60000;
+const PROBE_DEAD_HIDE_MS = 30000;
 // #1（0.0.4）：晃晕唤出余额面板 —— 抖动检测器 + 最近一次触发统计（日志/自测用）
 let shakeDetector = null;
 let lastShakeTrigger = null;   // {t,x,reversals,pathPt,...} 每次触发写一次，供日志/自测读取
@@ -185,6 +200,14 @@ const CHARW_REBASE_TOL = 0.08;         // 偏离基准多少才算「真变化�
 //      也会随缩放锚点移动 ~19pt，单靠 x 判据会误杀真缩放）。
 const CHARW_CURSOR_NEAR_PT = 80;       // 光标距桌宠本体中心 ≤ 该值 → 交互态「计时暂停」
 const CHARW_BIG_MOVE_X_PT = 10;        // 大变化 episode 内 bodyCenter x 漂移 > 该值 → 日志 move=1
+// 0.0.6 形状一致性门控（真机日志证据：打游戏时桌宠说话/倾听气泡把 bbox 撑到 191.5×174，宽 2.2×/高 1.6×）：
+//   气泡/遮挡只把「宽」撑大（高不按比例），真·缩放（Coopanion 改桌宠大小）是等比缩放 → 宽高同倍率。
+//   重定基准前先查 charH 是否等于「按宽度等比应有的高」：
+//     等比（±10%）→ 照旧走稳定计时，可重定基准；
+//     不等比      → 判为气泡/遮挡帧，当帧丢弃候选、不累计；只有持续 >60s 的稳定不等比（比如换了个宽扁皮肤）
+//                   才当真实形状变化放行（打游戏时的气泡/菜单停留都是秒级，到不了 60s）。
+const CHARW_SHAPE_TOL = 0.10;          // charH 相对「按宽度等比应有值」的容差
+const CHARW_SHAPE_HOLD_MS = 120000;    // 不等比变化持续多久才当真实形状变化放行（>2min；气泡/语音停留是秒级）
 let charWLastLine = -1;
 let charWPending = [];
 let charWStableSince = 0;
@@ -193,6 +216,13 @@ let charWJumpEpisode = false;          // 本次偏离是否以 >15% 跳变开�
 let lastPetMoveAt = 0;                 // 最近一次检测到桌宠移动的时间 ms（大变化要求静止 ≥2s）
 let lastSampleCx = NaN;                // 最近一条采样的桌宠本体中心 x（pt，屏幕左上原点；光标邻近判据用）
 let lastSampleCy = NaN;                // 最近一条采样的桌宠本体中心 y = (headY+feetY)/2（pt）
+let lastSampleCharH = NaN;             // 最近一条采样的角色高（pt，probe charHpt；形状门控用）
+let lockedCharH = NaN;                 // 与 lockedCharW 同一时刻的角色高（pt，形状门控基准）
+let lockedPetScale = NaN;              // 与 lockedCharW 同一时刻的 Coopanion 桌宠 scale（权威门控基准）
+let lockedPetFigure = '';              // 与 lockedCharW 同一时刻的桌宠皮肤 figure
+let charWShapeRejectSince = 0;         // 不等比偏 episode 起点 ms（0=当前不在不等比态）
+let charWShapeRejectLogged = false;    // 本 episode 的「不等比丢弃」日志只写一次，避免刷屏
+let charWShapeLongLogged = false;      // 本 episode 的「不等比 >2min 放行」日志只写一次
 let charWEpisodeAnchorX = NaN;         // 大变化 episode 起点 bodyCenter x（move=0/1 日志用）
 let charWCursorPaused = false;         // 当前大变化 episode 是否正因「光标在桌宠身上」暂停计时（日志用）
 let charWCursorPausedLogged = false;   // 本 episode 的「计时暂停」日志只写一次，避免刷屏
@@ -231,6 +261,11 @@ function observeCharWCandidate(candidate, now) {
   }
   if (!Number.isFinite(lockedCharW)) {
     lockedCharW = candidate;
+    if (Number.isFinite(lastSampleCharH) && lastSampleCharH > 20) lockedCharH = lastSampleCharH;
+    if (typeof petScaleKnown === 'boolean' && petScaleKnown && typeof petScale === 'number' && Number.isFinite(petScale)) {
+      lockedPetScale = petScale;
+      lockedPetFigure = (typeof petFigure === 'string') ? petFigure : '';
+    }
     charWPending = [];
     charWStableSince = now;
     charWBigSince = -1;
@@ -238,7 +273,17 @@ function observeCharWCandidate(candidate, now) {
     charWCursorPaused = false;
     charWCursorPausedLogged = false;
     charWEpisodeAnchorX = NaN;
+    charWShapeRejectSince = 0;
+    charWShapeRejectLogged = false;
+    charWShapeLongLogged = false;
     return;
+  }
+  // 权威基准懒初始化：启动时首条像素采样可能早于首次 /api/state 轮询（500ms），
+  // 拿到第一个真实 petScale 后补基准，避免开局窗口期门控不生效。
+  if (!Number.isFinite(lockedPetScale) && typeof petScaleKnown === 'boolean' && petScaleKnown
+      && typeof petScale === 'number' && Number.isFinite(petScale)) {
+    lockedPetScale = petScale;
+    lockedPetFigure = (typeof petFigure === 'string') ? petFigure : '';
   }
   const rel = Math.abs(candidate - lockedCharW) / lockedCharW;
   // 回到基准附近（待机呼吸/动画抖动）→ 清空候选与「大变化」跟踪，不重定基准。
@@ -250,6 +295,9 @@ function observeCharWCandidate(candidate, now) {
     charWCursorPaused = false;
     charWCursorPausedLogged = false;
     charWEpisodeAnchorX = NaN;
+    charWShapeRejectSince = 0;
+    charWShapeRejectLogged = false;
+    charWShapeLongLogged = false;
     return;
   }
   // 3~4 倍尖刺直接丢弃，避免菜单/气泡把 graphicsScale 推到上限；换肤/缩放仍保留至 2.2 倍范围。
@@ -259,7 +307,73 @@ function observeCharWCandidate(candidate, now) {
     charWStableSince = 0;
     charWBigSince = -1;
     charWJumpEpisode = false;
+    charWShapeRejectSince = 0;
+    charWShapeRejectLogged = false;
+    charWShapeLongLogged = false;
     return;
+  }
+  // 0.0.6 二版 · 权威尺寸门控（真机反例：说话气泡能让宽高**等比**膨胀 1.9×，形状门控拦不住）：
+  //   Coopanion /api/state 的桌宠 scale / skin.figure 是「用户设置」权威值 —— 只有它们变了才允许重定基准；
+  //   像素变宽而权威值没变 → 判为气泡/菜单/遮挡帧（丢弃，保持原盆宽）；变窄仍放行
+  //   （气泡结束回落、以及启动时正好在气泡态的自愈路径）。
+  const apiScale = (typeof petScaleKnown === 'boolean' && petScaleKnown && typeof petScale === 'number' && Number.isFinite(petScale)) ? petScale : NaN;
+  const apiFigure = (typeof petFigure === 'string') ? petFigure : '';
+  if (Number.isFinite(lockedPetScale) && Number.isFinite(apiScale)) {
+    const apiRel = Math.abs(apiScale - lockedPetScale) / Math.max(0.001, lockedPetScale);
+    const figChanged = !!(lockedPetFigure && apiFigure && apiFigure !== lockedPetFigure);
+    if (!figChanged && apiRel <= 0.001 && candidate > lockedCharW * (1 + CHARW_REBASE_TOL)) {
+      if (!charWShapeRejectSince) charWShapeRejectSince = now;
+      if (now - charWShapeRejectSince < CHARW_SHAPE_HOLD_MS) {
+        charWPending = [];
+        charWStableSince = 0;
+        charWBigSince = -1;
+        charWJumpEpisode = false;
+        if (!charWShapeRejectLogged) {
+          charWShapeRejectLogged = true;
+          logger.write(`scale charW api-gate charW=${candidate.toFixed(1)} charH=${Number.isFinite(lastSampleCharH) ? lastSampleCharH.toFixed(1) : 'NaN'} locked=${lockedCharW.toFixed(1)} petScale=${apiScale}（桌宠大小/皮肤没变却变宽：气泡/遮挡帧，保持原盆宽）`);
+        }
+        return;
+      }
+      // 持续 >2min 的安全阀：仍允许放行（避免 Coopanion 接口异常时永久卡住）
+      if (!charWShapeLongLogged) {
+        charWShapeLongLogged = true;
+        logger.write(`scale charW api-gate-long charW=${candidate.toFixed(1)} heldMs=${Math.round(now - charWShapeRejectSince)}（权威值未变但像素变宽 >2min，安全阀放行）`);
+      }
+    } else {
+      charWShapeRejectSince = 0;
+      charWShapeRejectLogged = false;
+      charWShapeLongLogged = false;
+    }
+  }
+  // 0.0.6 形状门控：气泡/遮挡把「宽」撑大但「高」不按比例 → 当帧丢弃（不累计、不改基准）。
+  // 真·等比缩放会通过（charH ≈ lockedCharH × k）；持续 >60s 的不等比才当真实形状变化放行。
+  if (Number.isFinite(lockedCharH) && lockedCharH > 20
+      && Number.isFinite(lastSampleCharH) && lastSampleCharH > 20) {
+    const k = candidate / lockedCharW;
+    const shape = lastSampleCharH / (lockedCharH * k); // 1 = 与宽度等比
+    if (Math.abs(shape - 1) > CHARW_SHAPE_TOL) {
+      if (!charWShapeRejectSince) charWShapeRejectSince = now;
+      if (now - charWShapeRejectSince < CHARW_SHAPE_HOLD_MS) {
+        charWPending = [];
+        charWStableSince = 0;
+        charWBigSince = -1;
+        charWJumpEpisode = false;
+        if (!charWShapeRejectLogged) {
+          charWShapeRejectLogged = true;
+          logger.write(`scale charW shape-reject charW=${candidate.toFixed(1)} charH=${lastSampleCharH.toFixed(1)} locked=${lockedCharW.toFixed(1)}×${lockedCharH.toFixed(1)} shape=${shape.toFixed(3)}（宽高不等比：疑似说话/倾听气泡或遮挡帧，保持原盆宽）`);
+        }
+        return;
+      }
+      // 持续 >2min 的不等比：视为真实形状变化（如换了宽扁皮肤），走正常计时放行（只记一次日志）。
+      if (!charWShapeLongLogged) {
+        charWShapeLongLogged = true;
+        logger.write(`scale charW shape-accept-long charW=${candidate.toFixed(1)} charH=${lastSampleCharH.toFixed(1)} locked=${lockedCharW.toFixed(1)}×${lockedCharH.toFixed(1)} heldMs=${Math.round(now - charWShapeRejectSince)}（持续不等比 >2min，当真实形状变化处理）`);
+      }
+    } else {
+      charWShapeRejectSince = 0;
+      charWShapeRejectLogged = false;
+      charWShapeLongLogged = false;
+    }
   }
   // 第 22 轮②：偏离开场（相对基准 >8%）→ 记起点；若第一帧就是 >15% 跳变，本次按「大变化」处理。
   if (charWBigSince < 0) {
@@ -316,7 +430,10 @@ function observeCharWCandidate(candidate, now) {
   // 第 22 轮加固⑤：bodyCenter x 相对 episode 起点漂移 >10pt 只作日志字段（不单独拦截）
   const move = (Number.isFinite(charWEpisodeAnchorX) && Number.isFinite(lastSampleCx)
     && Math.abs(lastSampleCx - charWEpisodeAnchorX) > CHARW_BIG_MOVE_X_PT) ? 1 : 0;
+  const prevCharW = lockedCharW, prevCharH = lockedCharH;
   lockedCharW = pMed;
+  if (Number.isFinite(lastSampleCharH) && lastSampleCharH > 20) lockedCharH = lastSampleCharH;
+  if (Number.isFinite(apiScale)) { lockedPetScale = apiScale; lockedPetFigure = apiFigure; }
   charWDrift = 0;
   charWPending = [];
   charWStableSince = now;
@@ -325,7 +442,10 @@ function observeCharWCandidate(candidate, now) {
   charWCursorPaused = false;
   charWCursorPausedLogged = false;
   charWEpisodeAnchorX = NaN;
-  logger.write(`scale charW baseline accepted charW=${lockedCharW.toFixed(1)} stableMs=${stableMs} spread=${spread.toFixed(3)} kind=${big ? 'big' : 'small'} move=${move}`);
+  charWShapeRejectSince = 0;
+  charWShapeRejectLogged = false;
+  charWShapeLongLogged = false;
+  logger.write(`scale charW baseline accepted charW=${lockedCharW.toFixed(1)} charH=${Number.isFinite(lockedCharH) ? lockedCharH.toFixed(1) : 'NaN'} prev=${Number.isFinite(prevCharW) ? prevCharW.toFixed(1) : 'NaN'}×${Number.isFinite(prevCharH) ? prevCharH.toFixed(1) : 'NaN'} stableMs=${stableMs} spread=${spread.toFixed(3)} kind=${big ? 'big' : 'small'} move=${move}`);
 }
 
 // 明细卡：展开后给用户一个短暂操作窗口，默认 8 秒无操作自动收起。
@@ -367,6 +487,8 @@ function petSampleTick(now) {
     const hy = Number(i.headPt);
     const fy = Number(i.feetPt);
     const cw = Number(i.charWpt);
+    const ch = Number(i.charHpt);
+    lastSampleCharH = (Number.isFinite(ch) && ch > 20) ? ch : NaN;
     // 第 22 轮加固④：记录本体中心点（光标邻近判据），head/feet 用于取本体中心 y
     if (cx > 0 && hy > 0) {
       lastSampleCx = cx;
@@ -421,6 +543,33 @@ function petSampleTick(now) {
       logger.write(`scale freeze end（冻结 ${now - scaleFrozenAt}ms，基准 locked=${f1(lockedCharW)} 未变 → 盆宽平滑恢复）`);
     }
   }
+}
+
+// 0.0.6 探针看门狗：petprobe 的 SCK 采图在「打游戏/窗口重建」时会挂死（进程还在、0% CPU、不再出行）。
+// 行号停滞 >6s → 重启 petprobe；重启间隔指数退避（6s、12s、24s、48s、60s 封顶），避免狂重启。
+function probeWatchdog(now) {
+  if (!locator || shotMode) return;
+  const lines = Number(locator.lines) || 0;
+  if (lines !== probeWatchLines) {
+    probeWatchLines = lines;
+    probeWatchAdvanceAt = now;
+    if (probeStaleLogged) {
+      probeStaleLogged = false;
+      logger.write(`probe watchdog recover lines=${lines}（探针恢复出行，重启次数=${probeRestartCount}）`);
+    }
+    return;
+  }
+  if (!probeWatchAdvanceAt) { probeWatchAdvanceAt = now; return; }
+  const staleMs = now - probeWatchAdvanceAt;
+  if (staleMs < PROBE_STALE_RESTART_MS || now < probeNextRestartAt) return;
+  const waitMs = Math.min(PROBE_RESTART_BACKOFF_MAX_MS, PROBE_STALE_RESTART_MS * Math.pow(2, Math.min(probeRestartCount, 4)));
+  probeRestartCount += 1;
+  probeNextRestartAt = now + waitMs;
+  logger.write(`probe watchdog restart staleMs=${Math.round(staleMs)} lines=${lines} count=${probeRestartCount} nextIn=${Math.round(waitMs)}ms（petprobe 行号停滞：重启探针）`);
+  try { locator.stop(); } catch (e) { /* ignore */ }
+  try { locator.start(); } catch (e) { /* ignore */ }
+  probeWatchAdvanceAt = now;
+  probeStaleLogged = true;
 }
 
 function updateCharW() {
@@ -670,6 +819,10 @@ async function pollPetState() {
     const j = await httpJson(`http://127.0.0.1:${cfg.position.petPort}/api/state`, 1500);
     if (j && Number.isFinite(Number(j.scale)) && Number(j.scale) > 0) {
       const ns = Number(j.scale);
+      // 0.0.6 二版：同时记皮肤 figure（换皮肤会改像素形状但不改 scale）
+      const fig = (j.skin && typeof j.skin.figure === 'string') ? j.skin.figure : '';
+      if (fig && fig !== petFigure) { petFigure = fig; logger.write(`pet state figure=${fig}（换皮肤，允许尺寸重定基准）`); }
+      petScaleKnown = true;
       if (Math.abs(ns - petScale) > 0.001) {
         petScale = ns;
         logger.write(`scale apply petScale=${petScale} petScaleRef=${cfg.display.petScaleRef} charW=${currentCharW()} graphicsScale=${layoutMod.graphicsScale(cfg, petScale, currentCharW()).toFixed(3)}`);
@@ -1079,6 +1232,7 @@ function positionTick() {
   if (loopStopped || shotMode) return;
   const started = Date.now();
   petSampleTick(started); // 拖拽瞬态检测（决定本次循环是否冻结 scale；须在 updateCharW 之前）
+  probeWatchdog(started); // 0.0.6：petprobe 挂死检测/重启（在采样读取之后，避免重启瞬间丢行号）
   updateCharW();
   try {
     if (!panelWin || panelWin.isDestroyed() || !cfg) { schedulePosition(); return; }
@@ -1111,7 +1265,7 @@ function positionTick() {
       const missingMs = nowPet - petMissingSince;
       // 异常兜底（保留原 5s 路径）：只在「窗口存在性信号未知」时生效（探针没起/挂了、信号过期）；
       // 明确判定窗口还在（capture-error 带 wid）→ 不隐藏；明确判定窗口缺失 → 走下面的 600ms 快路径。
-      if (!noPetHidden && panelShown && missingMs >= NO_PET_HIDE_MS && pastGrace && winPresent === null) {
+      if (!noPetHidden && panelShown && missingMs >= PROBE_DEAD_HIDE_MS && pastGrace && winPresent === null) {
         try { panelWin.hide(); } catch (e) { /* ignore */ }
         panelShown = false;
         noPetHidden = true;

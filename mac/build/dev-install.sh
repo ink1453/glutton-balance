@@ -13,7 +13,7 @@
 #
 # 冒烟自检（默认全做）：
 #   1) 进程已由 launchd 拉起（PPID=1，直启 plist 场景）
-#   2) 已安装 App 的 Info.plist 版本 = 工程 package.json 版本（当前 0.0.5）
+#   2) 已安装 App 的 Info.plist 版本 = 工程 package.json 版本（当前 0.0.6）
 #   3) 已安装 App 签名 = 本机自签证书 "Maizi Local Code Signing" 且 flags=0x0（非 ad-hoc）
 #   4) panel.log 出现本次启动的新 start 行（版本与 Info.plist 一致）
 #   5) 定位器 detect 生效：panel.log 出现 place src=detect（或启动时的 panel shown ... src=detect/detect）；
