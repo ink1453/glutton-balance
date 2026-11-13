@@ -167,7 +167,53 @@ function buildStyle(opts) {
   style.woodGrainLight = 'rgba(120,96,60,0.0941)';
   style.woodGrainDark = 'rgba(255,238,205,0.1020)';
   style.key = `${theme}/${pal ? 'api:' + style.selectedId : 'fallback'}`;
+  // 第 27 轮 · minicard（小面板）token —— 全部挂独立子对象，上面 30 个既有键一个都不动（ricebowl 零变化）。
+  style.mc = buildMinicardStyle(light);
   return style;
+}
+
+// ===========================================================================
+// 第 27 轮 · minicard（macOS 毛玻璃小面板）配色
+//   boss：「ui 风格就用 macos 目前这个版本的」。所以这里不复用饭桶的木牌/盆栽色系，
+//   直接用 macOS 系统色（Apple HIG 的 systemGreen/Orange/Red）+ 当前版本毛玻璃观感。
+//   ⚠️ 与 vibrancy 的关系见 MINICARD_NATIVE_VIBRANCY：窗口若开原生 vibrancy（需改 main.js），
+//   卡面 fill 要降到「只加一层极淡色调」，否则会把背后的模糊糊死；反之自绘要够实。
+// ===========================================================================
+const MINICARD_NATIVE_VIBRANCY = false; // 开关：true = 窗口已开原生 vibrancy（main.js 需 vibrancy+visualEffectState）
+
+function buildMinicardStyle(light) {
+  const sys = light
+    ? { green: C(40, 205, 65), orange: C(255, 149, 0), red: C(255, 59, 48), grey: C(142, 142, 147) }
+    : { green: C(48, 209, 88), orange: C(255, 159, 10), red: C(255, 69, 58), grey: C(152, 152, 157) };
+  const s = {
+    light: !!light,
+    nativeVibrancy: MINICARD_NATIVE_VIBRANCY,
+    ok: sys.green, warning: sys.orange, fail: sys.red, idle: sys.grey,
+    // 状态点：成功绿 / 低余额橙 / 失败红（与饭桶 token 解耦，用 macOS 系统色）
+    dotOk: rgba(sys.green), dotWarn: rgba(sys.orange), dotFail: rgba(sys.red), dotIdle: rgba(sys.grey),
+    // 描边：高级感靠「一像素细边 + 顶部内高光」
+    border: light ? 'rgba(0,0,0,0.09)' : 'rgba(255,255,255,0.14)',
+    innerTop: light ? 'rgba(255,255,255,0.62)' : 'rgba(255,255,255,0.16)',
+    divider: light ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.07)',
+    shadow: light ? 'rgba(0,0,0,0.14)' : 'rgba(0,0,0,0.38)',
+    name: light ? 'rgba(0,0,0,0.86)' : 'rgba(255,255,255,0.92)',
+    amount: light ? 'rgba(0,0,0,0.94)' : 'rgba(255,255,255,0.98)',
+    // 浅色主题：低额金额是**文字**，亮橙 255,149,0 叠白底只有 2.2:1，达不到 WCAG AA 4.5:1。
+    // 故浅色下金额用深橙 166,88,0（5.01:1），与状态点同色系但更深；深色主题橙底够亮（9.4:1）保持原样。
+    amountLow: light ? 'rgb(166,88,0)' : rgba(sys.orange),
+    amountFail: light ? 'rgba(0,0,0,0.42)' : 'rgba(255,255,255,0.45)',
+    amountRice: light ? 'rgba(146,100,20,0.95)' : 'rgba(255,214,140,0.96)',
+  };
+  if (MINICARD_NATIVE_VIBRANCY) {
+    // 原生 vibrancy 已负责模糊：卡面只留极淡色调，避免「糊上一层白」把毛玻璃质感盖掉
+    s.fill = light ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.10)';
+    s.fillTop = light ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.05)';
+  } else {
+    // 自绘降级：普通 transparent 窗口，需要自己画出玻璃感（半透明 + 细边 + 顶部高光）
+    s.fill = light ? 'rgba(255,255,255,0.55)' : 'rgba(28,28,32,0.55)';
+    s.fillTop = light ? 'rgba(255,255,255,0.72)' : 'rgba(255,255,255,0.12)';
+  }
+  return s;
 }
 
 module.exports = { buildStyle, parseThemePalettes, hexToRgb, rgba, mix, compositeOver };

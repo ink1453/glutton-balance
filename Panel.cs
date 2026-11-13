@@ -14,15 +14,17 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 
-// ---- 0.0.6（第 25 轮乙路）：Win 显示窗版本元数据同号 0.0.6 ----
+// ---- 0.0.7（第 27 轮）：Win 显示窗版本元数据同号 0.0.7，与 Mac / npm / 插件市场统一 ----
 // 只写 exe 的 Win32 版本资源（属性→详细信息 可查），不改任何运行逻辑；
-// 编译后可在 Win 侧核对：(Get-Item .\panel.exe).VersionInfo.FileVersion → 0.0.6.0
-[assembly: System.Reflection.AssemblyVersion("0.0.6.0")]
-[assembly: System.Reflection.AssemblyFileVersion("0.0.6.0")]
-[assembly: System.Reflection.AssemblyInformationalVersion("0.0.6")]
+// 编译后可在 Win 侧核对：(Get-Item .\panel.exe).VersionInfo.FileVersion → 0.0.7.0
+// 0.0.7 变化：新增 minicard 小面板形态（一行一家）；金额去小数；CREDITS 改「C 2177」口径。
+[assembly: System.Reflection.AssemblyVersion("0.0.7.0")]
+[assembly: System.Reflection.AssemblyFileVersion("0.0.7.0")]
+[assembly: System.Reflection.AssemblyInformationalVersion("0.0.7")]
 
 namespace GluttonBalance
 {
@@ -34,6 +36,7 @@ namespace GluttonBalance
         [STAThread]
         private static int Main(string[] args)
         {
+            EnableModernTls();
             bool quitRequested = false;
             int demoCount = 0;
             string shotPath = null;
@@ -93,6 +96,26 @@ namespace GluttonBalance
                     try { mutex.ReleaseMutex(); }
                     catch { }
                 }
+            }
+        }
+
+        /// <summary>
+        /// 0.0.7 修复：.NET Framework 4.0 的默认 SecurityProtocol 只有 Ssl3+Tls（1.0），
+        /// 而 Qoder 的 openapi.qoder.com.cn 只接受 TLS 1.2 以上，握手直接 SecureChannelFailure
+        /// （日志表现为 NETWORK (qoder.exchange)）。这里显式开启 TLS 1.2/1.1，
+        /// 老系统不支持时静默跳过，保留原有行为，不影响 DeepSeek / A6 等仍走 TLS 1.0 的站点。
+        /// </summary>
+        private static void EnableModernTls()
+        {
+            try
+            {
+                // 3072 = Tls12，768 = Tls11（用数值兜底：老编译器可能没有 Tls12 枚举成员）
+                ServicePointManager.SecurityProtocol =
+                    (SecurityProtocolType)3072 | (SecurityProtocolType)768 | SecurityProtocolType.Tls;
+            }
+            catch
+            {
+                try { ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls; } catch { }
             }
         }
 
@@ -339,6 +362,8 @@ namespace GluttonBalance
         public bool Low;
         public string Error = "";
         public string Currency = "CNY";
+        /// <summary>0.0.7：显示单位 CNY / USD / CREDITS（明细卡阈值文案与金额格式用；qoder 默认 CREDITS）。</summary>
+        public string Unit = "CNY";
         // ---- v3：白饭桶 / 明细展开用 ----
         public string Id = "";
         public bool Rice;
@@ -2104,7 +2129,9 @@ namespace GluttonBalance
             bool logPlacement = false;
             bool smooth = true;
             Config cfgSnap = null;
+            int countSnap = 0;   // 0.0.7：lock 内的 n 作用域不外露，带出来给 mini 渲染用
             bool rice = false;
+            bool mini = false;   // 0.0.7：minicard 小面板形态
             bool expanded = false;
             BowlLayout lay = null;
             // ---- v21（第 21 轮乙路）：桌宠缺失隐藏快照（lock 内赋值，lock 外用于日志/显隐）----
@@ -2118,6 +2145,7 @@ namespace GluttonBalance
                 if (cfg == null) return;
                 cfgSnap = cfg;
                 int n = EffectiveProviderCountLocked();
+                countSnap = n;
                 visible = cfg.Enabled && n > 0;
                 // 桌宠缺失 ≥600ms：本次不计算位置/布局、不跑动画，直接走已有的 SW_HIDE 分支（保持最后位置）
                 hiddenByMissingPet = HiddenByMissingPet;
@@ -2127,6 +2155,7 @@ namespace GluttonBalance
                 if (hiddenByMissingPet) visible = false;
                 smooth = cfg.LiveFollow == null || cfg.LiveFollow.Smooth;
                 rice = cfg.Display != null && string.Equals(cfg.Display.Style, "ricebowl", StringComparison.OrdinalIgnoreCase);
+                mini = cfg.Display != null && string.Equals(cfg.Display.Style, "minicard", StringComparison.OrdinalIgnoreCase);
                 bool headWear = cfg.Display != null && string.Equals(cfg.Display.Wear, "head", StringComparison.OrdinalIgnoreCase);
                 expanded = Expanded && rice && cfg.Interaction != null && cfg.Interaction.ExpandOnClick;
                 if (visible)
@@ -2222,7 +2251,20 @@ namespace GluttonBalance
                 Bitmap bmp = null;
                 try
                 {
-                    if (rice && lay != null)
+                    if (mini)
+                    {
+                        // 0.0.7 小面板：必须与 ComputePlacementLocked 用同一个 n 重算，
+                        // 否则图与窗口尺寸不一致 → PaintLayered 整幅 Blit 只画一部分/留白。
+                        // McRenderer 对越界 view 已做 null 兜底（灰点 + "--"），不会崩。
+                        // n 与 views 实际条数取较小值：DemoCount 等场景下两者可能不等，
+                        // 用较小值保证「图里的行数 = 有数据的行数」，也不越界。
+                        int mn = countSnap;
+                        if (views == null) mn = 0;
+                        else if (views.Length < mn) mn = views.Length;
+                        McLayout mcl = McLayout.Compute(cfgSnap, mn, DpiScale, GraphicsScaleVal, ViewNamesForMini(cfgSnap, mn));
+                        bmp = McRenderer.Render(views, mcl, Style, DpiScale);
+                    }
+                    else if (rice && lay != null)
                     {
                         if (expanded) bmp = DetailRenderer.Render(cfgSnap, views, lay, Style, DpiScale);
                         else bmp = BowlRenderer.Render(cfgSnap, views, lay, Style, DpiScale);
@@ -2267,10 +2309,11 @@ namespace GluttonBalance
                 sb.Append(v.Id).Append('>')
                   .Append(v.Name).Append('|')
                   .Append(v.HasResult ? 1 : 0).Append(v.Ok ? 1 : 0).Append('|')
-                  .Append(v.Amount.ToString("0.00", CultureInfo.InvariantCulture)).Append('|')
+                  // 0.0.7：指纹也按取整后的值，否则小数位变化会触发无谓重绘、而显示上是同一个数字
+                  .Append(UnitFormat.Money(v.Amount).ToString(CultureInfo.InvariantCulture)).Append('|')
                   // v22：失败时「上次成功金额」是否在显示也要参与内容指纹，否则 10 分钟窗口到期不会重绘成「连接失败」
                   .Append(v.ShowLastGood ? 1 : 0).Append('|')
-                  .Append(v.LastGoodAmount.ToString("0.00", CultureInfo.InvariantCulture)).Append('|')
+                  .Append(UnitFormat.Money(v.LastGoodAmount).ToString(CultureInfo.InvariantCulture)).Append('|')
                   .Append(v.Low ? 1 : 0).Append('|')
                   .Append(v.Rice ? 1 : 0).Append('|')
                   .Append(v.Ratio.ToString("0.###", CultureInfo.InvariantCulture)).Append('|')
@@ -2292,6 +2335,28 @@ namespace GluttonBalance
             return sb.ToString();
         }
 
+        /// <summary>
+        /// 小面板定卡宽用的家名清单。按配置里的 provider 顺序取名（还没查到结果时也有稳定宽度，
+        /// 避免「首帧窄、来数据后变宽」的抖动）。家数不足时用占位空串补齐。
+        /// </summary>
+        private string[] ViewNamesForMini(Config cfg, int n)
+        {
+            if (n < 0) n = 0;
+            string[] names = new string[n];
+            int got = 0;
+            if (cfg != null && cfg.Providers != null)
+            {
+                for (int i = 0; i < cfg.Providers.Count && got < n; i++)
+                {
+                    ProviderConfig pc = cfg.Providers[i];
+                    string nm = (pc == null || pc.Name == null) ? "" : pc.Name.Trim();
+                    names[got++] = nm;
+                }
+            }
+            while (got < n) names[got++] = "";
+            return names;
+        }
+
         private Placement ComputePlacementLocked(Config cfg, int n, bool expanded)
         {
             Placement pl = new Placement();
@@ -2300,7 +2365,14 @@ namespace GluttonBalance
             pl.ZOrder = cfg.Position.ZOrder;
             int w, h;
             bool headWear = cfg.Display != null && string.Equals(cfg.Display.Wear, "head", StringComparison.OrdinalIgnoreCase);
-            if (cfg.Display != null && string.Equals(cfg.Display.Style, "ricebowl", StringComparison.OrdinalIgnoreCase))
+            if (cfg.Display != null && string.Equals(cfg.Display.Style, "minicard", StringComparison.OrdinalIgnoreCase))
+            {
+                // 0.0.7 第三种形态：小面板。卡片尺寸即窗口尺寸（PaintLayered 整幅 Blit，必须同源）。
+                McLayout mcl = McLayout.Compute(cfg, n, DpiScale, GraphicsScaleVal, ViewNamesForMini(cfg, n));
+                w = (int)Math.Round(mcl.CardW);
+                h = (int)Math.Round(mcl.CardH);
+            }
+            else if (cfg.Display != null && string.Equals(cfg.Display.Style, "ricebowl", StringComparison.OrdinalIgnoreCase))
             {
                 BowlLayout lay = BowlLayout.Compute(cfg, n, DpiScale, GraphicsScaleVal, headWear);
                 if (expanded) DetailRenderer.Measure(cfg, n, DpiScale, lay, out w, out h);
@@ -2409,6 +2481,7 @@ namespace GluttonBalance
                 ProviderView v = new ProviderView();
                 v.Id = rt.Cfg.Id;
                 v.Name = string.IsNullOrEmpty(rt.Cfg.Name) ? rt.Cfg.Id : rt.Cfg.Name;
+                v.Unit = UnitFormat.Normalize(rt.Cfg.Unit, Net.NormalizePreset(rt.Cfg));
                 v.Rice = rt.Cfg.IsRice;
                 v.FullAmount = rt.Cfg.FullAmount;
                 v.Threshold = rt.Cfg.Threshold.HasValue ? rt.Cfg.Threshold.Value : double.NaN;
@@ -2673,16 +2746,22 @@ namespace GluttonBalance
             {
                 Color amountColor = v.Low ? LowColor : AmountColor;
                 Font numFont = GetFont(16f * scale, FontStyle.Bold);
-                Font yenFont = GetFont(13f * scale, FontStyle.Regular);
-                string symbol = string.Equals(v.Currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : "¥";
-                string number = v.Amount.ToString("0.00", CultureInfo.InvariantCulture);
-                float wYen = Measure(g, symbol, yenFont);
+                Font unitFont = GetFont(13f * scale, FontStyle.Regular);
+                // 0.0.7：显示单位分支——CREDITS 不画 ¥/$，金额后接「 Credits」；USD 用 $；其余 ¥（旧口径）
+                string unit = UnitFormat.Normalize(v.Currency, "");
+                string symbol = UnitFormat.Symbol(unit);
+                string suffix = UnitFormat.Suffix(unit);
+                // 0.0.7：与 Mac 侧一致，金额取整（老板「把小数点后去掉」）
+                string number = UnitFormat.Money(v.Amount).ToString(CultureInfo.InvariantCulture);
+                float wSymbol = symbol.Length == 0 ? 0f : Measure(g, symbol, unitFont);
                 float wNum = Measure(g, number, numFont);
-                float total = wYen + wNum;
+                float wSuffix = suffix.Length == 0 ? 0f : Measure(g, suffix, unitFont);
+                float total = wSymbol + wNum + wSuffix;
                 float startX = x0 + cw - rightPad - total;
-                float yShift = (MeasureHeight(g, number, numFont) - MeasureHeight(g, symbol, yenFont)) * 0.5f;
-                DrawAt(g, symbol, yenFont, amountColor, startX, y0 + yShift, ch);
-                DrawAt(g, number, numFont, amountColor, startX + wYen, y0, ch);
+                float yShift = (MeasureHeight(g, number, numFont) - MeasureHeight(g, "0", unitFont)) * 0.5f;
+                if (wSymbol > 0f) DrawAt(g, symbol, unitFont, amountColor, startX, y0 + yShift, ch);
+                DrawAt(g, number, numFont, amountColor, startX + wSymbol, y0, ch);
+                if (wSuffix > 0f) DrawAt(g, suffix, unitFont, amountColor, startX + wSymbol + wNum, y0 + yShift, ch);
                 nameRight = startX - 4f * scale;
             }
 
@@ -2757,6 +2836,8 @@ namespace GluttonBalance
         public string Preset = "";
         public string JsonPath = "";
         public string Currency = "CNY";
+        /// <summary>0.0.7：显示单位 CNY / USD / CREDITS（大小写不敏感；缺省 qoder→CREDITS、openrouter→USD、其余 CNY）。</summary>
+        public string Unit = "CNY";
         public string Endpoint = "";
         public string StatusEndpoint = "";
         public string A6User = "";
@@ -2823,7 +2904,7 @@ namespace GluttonBalance
     /// <summary>v3：显示形态（ricebowl 白饭桶 / capsule 旧胶囊回退）与盆外观。</summary>
     internal sealed class DisplayConfig
     {
-        public string Style = "ricebowl";       // ricebowl | capsule（回退）
+        public string Style = "ricebowl";       // ricebowl | minicard（0.0.7 小面板）| capsule（回退）
         public string BowlStyle = "porcelain";  // porcelain 白瓷圈足碗（默认）| black 深色宽沿浅盆 | steel 不锈钢 | custom:<名字>（0.0.4：删除 enamel 搪瓷外观，旧值自动回退 porcelain）
         public string LabelStyle = "L3";        // L1 盆沿小字 | L2 饭票小旗 | L3 盆沿木牌（默认）
         public string Wear = "head";            // v4：head 头顶（默认）| feet 脚下（头顶强制无轮子）
@@ -2836,6 +2917,7 @@ namespace GluttonBalance
         public double PetScaleRef = 1.05;       // 设计基准的 /api/state scale（本机 100% 时为 1.05）
         public double GraphicsMin = 0.95;       // graphicsScale 下限（保可读：金额≥9px/家名≥8px）
         public double GraphicsMax = 2.0;        // graphicsScale 上限
+        public int SizePct = 100;                // 0.0.7：整体缩放百分比（40–200），与 Mac shared/config-core.js 同口径；经 ScaleMath 作用于全部形态
     }
 
     /// <summary>v3：主题联动（读 Coopanion 本地主题接口）。</summary>
@@ -2984,7 +3066,11 @@ namespace GluttonBalance
             if (disp != null)
             {
                 string st = Json.GetString(disp, "style", "ricebowl");
-                cfg.Display.Style = string.Equals(st, "capsule", StringComparison.OrdinalIgnoreCase) ? "capsule" : "ricebowl";
+                // 0.0.7：新增 minicard（小面板，一行一家）。三态白名单，非法值回退 ricebowl。
+                string stLow = (st ?? "").Trim().ToLowerInvariant();
+                if (stLow == "minicard") cfg.Display.Style = "minicard";
+                else if (stLow == "capsule") cfg.Display.Style = "capsule";
+                else cfg.Display.Style = "ricebowl";
                 string bs = Json.GetString(disp, "bowlStyle", "porcelain");
                 bs = (bs ?? "").Trim();
                 string bsLow = bs.ToLowerInvariant();
@@ -3008,6 +3094,10 @@ namespace GluttonBalance
                 double? gmin = Json.GetNumber(disp, "graphicsMin");
                 if (gmin.HasValue) cfg.Display.GraphicsMin = ClampDouble(gmin.Value, 0.3, 3.0);
                 if (cfg.Display.GraphicsMin < 0.95) cfg.Display.GraphicsMin = 0.95;   // 可读下限
+                // 0.0.7：整体缩放（饭桶 + 面板两种形态都生效，经 ScaleMath.GraphicsScale 乘 K）。clamp 40..200 + 四舍五入取整，与 Mac
+                // shared/config-core.js 的 clampNum(...,40,200) + int() 逐条对齐；缺省 100。
+                double? szp = Json.GetNumber(disp, "sizePct");
+                if (szp.HasValue) cfg.Display.SizePct = (int)Math.Round(ClampDouble(szp.Value, 40, 200));
                 double? gmax = Json.GetNumber(disp, "graphicsMax");
                 if (gmax.HasValue) cfg.Display.GraphicsMax = ClampDouble(gmax.Value, 0.3, 4.0);
                 // v4.1：排法（缺省/空/未知 → pyramid；旧默认 row9 → pyramid 迁移；显式 row / twoRows 保留）
@@ -3051,9 +3141,16 @@ namespace GluttonBalance
                     pc.Name = Json.GetString(p, "name", pc.Id);
                     pc.Type = Json.GetString(p, "type", "deepseek");
                     pc.Preset = Json.GetString(p, "preset", "");
+                    // 0.0.7：unit（大小写不敏感；旧配置没有该字段时按 preset 推导，原有 CNY/USD 行为不变）
+                    string presetNorm = Net.NormalizePreset(pc);
+                    pc.Unit = UnitFormat.Normalize(Json.GetString(p, "unit", ""), presetNorm);
+                    // 0.0.7 Qoder 默认名与 Mac 端一致（仅用户没填 name 时）
+                    if (presetNorm == "qoder" && string.IsNullOrEmpty(Json.GetString(p, "name", ""))) pc.Name = "Qoder";
                     pc.JsonPath = Json.GetString(p, "jsonPath", "");
                     pc.Currency = Json.GetString(p, "currency", "CNY");
                     pc.Endpoint = Json.GetString(p, "endpoint", "");
+                    // 0.0.7 Qoder 的 endpoint 是 base（不是完整余额地址）：没填才落国内默认，用户填国际版就照用
+                    if (presetNorm == "qoder" && pc.Endpoint.Trim().Length == 0) pc.Endpoint = Net.QoderDefaultEndpoint;
                     string statusEndpoint = Json.GetString(p, "statusEndpoint", "");
                     pc.StatusEndpoint = statusEndpoint;
                     string a6User = Json.GetString(p, "a6User", "");
@@ -3065,13 +3162,22 @@ namespace GluttonBalance
                         pc.KeySource.File = Json.GetString(ks, "file", "");
                         pc.KeySource.Var = Json.GetString(ks, "var", "");
                     }
+                    // 0.0.7 Qoder：没显式给 file/var 时补 Windows 预设（规格 §3；其余预设保持旧行为不变）
+                    if (presetNorm == "qoder" && pc.KeySource.File.Trim().Length == 0 && pc.KeySource.Var.Trim().Length == 0)
+                    {
+                        pc.KeySource.Kind = "file";
+                        pc.KeySource.File = "%USERPROFILE%\\.dsh\\secrets\\qoder-pat.txt";
+                        pc.KeySource.Var = "QODER_PAT";
+                    }
                     object threshold = Json.GetValue(p, "threshold");
                     pc.Threshold = Json.ToDoubleOrNull(threshold);
                     double? interval = Json.GetNumber(p, "intervalSec");
                     if (interval.HasValue) pc.IntervalSec = Clamp((int)Math.Round(interval.Value), 10, 3600);
                     pc.Enabled = Json.GetBool(p, "enabled", true);
                     double? fullAmt = Json.GetNumber(p, "fullAmount");
-                    pc.FullAmount = fullAmt.HasValue ? ClampDouble(fullAmt.Value, 0.01, 1000000) : cfg.Display.RefYuan;
+                    // 0.0.7 Qoder 的余额单位是 Credits（Pro 套餐每月 2000），沿用 refYuan=100 会让米饭永远满盆
+                    if (fullAmt.HasValue) pc.FullAmount = ClampDouble(fullAmt.Value, 0.01, 1000000);
+                    else pc.FullAmount = presetNorm == "qoder" ? 2000 : cfg.Display.RefYuan;
                     if (string.IsNullOrEmpty(pc.Id)) pc.Id = "p" + (i + 1);
                     cfg.Providers.Add(pc);
                 }
@@ -3132,6 +3238,9 @@ namespace GluttonBalance
                 if (!string.IsNullOrEmpty(p.Preset)) sb.Append("      \"preset\": ").Append(Json.Quote(p.Preset)).Append(",\n");
                 if (!string.IsNullOrEmpty(p.JsonPath)) sb.Append("      \"jsonPath\": ").Append(Json.Quote(p.JsonPath)).Append(",\n");
                 if (!string.IsNullOrEmpty(p.Currency) && p.Currency != "CNY") sb.Append("      \"currency\": ").Append(Json.Quote(p.Currency)).Append(",\n");
+                // 0.0.7：unit 只写非默认值（旧键顺序保持：currency 之后、endpoint 之前）
+                if (!string.IsNullOrEmpty(p.Unit) && !string.Equals(p.Unit, "CNY", StringComparison.OrdinalIgnoreCase))
+                    sb.Append("      \"unit\": ").Append(Json.Quote(p.Unit)).Append(",\n");
                 sb.Append("      \"endpoint\": ").Append(Json.Quote(p.Endpoint)).Append(",\n");
                 if (!string.IsNullOrEmpty(p.StatusEndpoint))
                 {
@@ -3300,13 +3409,102 @@ namespace GluttonBalance
         }
     }
 
+    /// <summary>
+    /// 0.0.7 显示单位（规格 output/qoder-provider-spec.md §3）：CNY / USD / CREDITS。
+    /// CREDITS 不带 ¥/$，金额后接「 Credits」（如 2177.00 Credits）；USD 用 $；其余一律 ¥（保持旧口径）。
+    /// </summary>
+    internal static class UnitFormat
+    {
+        public const string Cny = "CNY";
+        public const string Usd = "USD";
+        public const string Credits = "CREDITS";
+
+        /// <summary>单位归一化：大小写不敏感；缺省按 preset 推导（qoder→CREDITS，openrouter→USD，其余 CNY）。</summary>
+        public static string Normalize(string raw, string preset)
+        {
+            string s = (raw ?? "").Trim().ToUpperInvariant();
+            if (s == Cny || s == Usd || s == Credits) return s;
+            string p = (preset ?? "").Trim().ToLowerInvariant();
+            if (p == "qoder") return Credits;
+            if (p == "openrouter") return Usd;
+            return Cny;
+        }
+
+        /// <summary>
+        /// 金额前缀符号：CNY→¥、USD→$、CREDITS→"C "（大写 C + 一个空格）。
+        /// 0.0.7 老板令：Credits 和 ¥/$ 一样把符号放金额前面，不写 "Credits" 字样、不带小数；
+        /// 与 Mac renderer.js 的 CREDITS_SYMBOL 逐字一致（双端口径必须相同）。
+        /// </summary>
+        public static string Symbol(string unit)
+        {
+            string u = (unit ?? "").Trim().ToUpperInvariant();
+            if (u == Usd) return "$";
+            if (u == Credits) return "C ";
+            return "¥";
+        }
+
+        /// <summary>金额后缀：仅 CREDITS 有（「 Credits」）。</summary>
+        /// <summary>
+        /// 金额后缀：0.0.7 起一律为空 —— CREDITS 的单位已由前缀 "C " 表达，
+        /// 不再输出 " Credits"（与 Mac 侧只画符号、不写英文单位的口径一致）。
+        /// </summary>
+        public static string Suffix(string unit)
+        {
+            return "";
+        }
+
+        /// <summary>
+        /// 0.0.7：金额取整（老板 2026-11-13「把小数点后去掉」）。
+        /// 口径与 Mac 侧 renderer.js 的 moneyText() 逐条对齐：四舍五入、负数远离零、-0 归一为 0。
+        /// </summary>
+        public static long Money(double amount)
+        {
+            if (double.IsNaN(amount) || double.IsInfinity(amount)) return 0L;
+            double r = amount < 0 ? -Math.Round(-amount, MidpointRounding.AwayFromZero)
+                                  : Math.Round(amount, MidpointRounding.AwayFromZero);
+            if (r == 0) r = 0;   // 归一 -0
+            if (r > long.MaxValue) return long.MaxValue;
+            if (r < long.MinValue) return long.MinValue;
+            return (long)r;
+        }
+
+        /// <summary>单行金额文案：¥12 / $12 / C 2177（0.0.7：带符号前缀、去小数、CREDITS 不写英文单位）。</summary>
+        public static string Format(string unit, double amount)
+        {
+            return Symbol(unit) + Money(amount).ToString(CultureInfo.InvariantCulture) + Suffix(unit);
+        }
+
+        /// <summary>明细卡阈值文案：¥5 / $5 / 5 Credits（CREDITS 不写 ¥；保留旧口径的 0.##）。</summary>
+        public static string ThresholdText(string unit, double value)
+        {
+            string text = value.ToString("0.##", CultureInfo.InvariantCulture);
+            string u = (unit ?? "").Trim().ToUpperInvariant();
+            if (u == Credits) return text + " Credits";
+            return (u == Usd ? "$" : "¥") + text;
+        }
+    }
+
     internal sealed class ApiException : Exception
     {
         public readonly string SafeMessage;
+        /// <summary>0.0.7：HTTP 状态码（0 = 没有拿到 HTTP 响应，如网络/超时）。</summary>
+        public readonly int Status;
+        /// <summary>0.0.7：WebException.Status（网络/超时/TLS 分类用；HTTP 错误一般是 ProtocolError）。</summary>
+        public readonly WebExceptionStatus WebStatus;
 
-        public ApiException(string message) : base(message)
+        public ApiException(string message) : this(message, 0, WebExceptionStatus.Success)
+        {
+        }
+
+        public ApiException(string message, int status) : this(message, status, WebExceptionStatus.Success)
+        {
+        }
+
+        public ApiException(string message, int status, WebExceptionStatus webStatus) : base(message)
         {
             SafeMessage = message;
+            Status = status;
+            WebStatus = webStatus;
         }
     }
 
@@ -3317,6 +3515,22 @@ namespace GluttonBalance
         private static double s_quotaPerUnit;
         private static double s_fx;
         private static long s_statusAtMs = -1000000000;
+
+        // ---- 0.0.7 Qoder（规格 output/qoder-provider-spec.md）：PAT → jt- → usage 两段式 ----
+        // endpoint 是 base（默认国内，可改国际版 openapi.qoder.sh）；密钥/令牌只进内存，缓存键是 base+PAT 的 SHA-256。
+        internal const string QoderDefaultEndpoint = "https://openapi.qoder.com.cn";
+        private const string QoderExchangePath = "/api/v1/jobToken/exchange";
+        private const string QoderUsagePath = "/sash/api/v2/me/usage";
+        private const int QoderTokenTtlMs = 20 * 60 * 1000; // jt- 进程内缓存 20 分钟（上游约 24h 有效）
+        private static readonly object s_qoderGate = new object();
+        private static readonly Dictionary<string, QoderToken> s_qoderTokens = new Dictionary<string, QoderToken>();
+
+        /// <summary>jt- 缓存条目：只存令牌与时间戳，不存 PAT。</summary>
+        private sealed class QoderToken
+        {
+            public string Token = "";
+            public long AtMs;
+        }
 
         public static PetState QueryPetState(int port)
         {
@@ -3355,6 +3569,7 @@ namespace GluttonBalance
                 case "siliconflow":
                 case "stepfun":
                 case "openrouter": return QueryOfficialPreset(pc, NormalizePreset(pc));
+                case "qoder": return QueryQoder(pc);
                 case "newapi": return QueryA6(pc);
                 case "custom": return QueryCustom(pc);
                 default: return BalanceResult.Fail("unsupported preset: " + (pc.Preset ?? "") + "/" + (pc.Type ?? ""));
@@ -3368,6 +3583,7 @@ namespace GluttonBalance
             if (preset.Length > 0)
             {
                 if (preset == "a6" || preset == "a6_newapi" || preset == "new-api") return "newapi";
+                if (preset == "qoder") return "qoder";
                 return preset;
             }
             string type = (pc.Type ?? "").Trim().ToLowerInvariant();
@@ -3390,6 +3606,7 @@ namespace GluttonBalance
                 case "siliconflow": return "https://api.siliconflow.cn/v1/user/info";
                 case "stepfun": return "https://api.stepfun.com/v1/accounts";
                 case "openrouter": return "https://openrouter.ai/api/v1/credits";
+                case "qoder": return QoderDefaultEndpoint;
                 case "newapi": return "https://a6api.vip/api/user/self";
                 default: return endpoint;
             }
@@ -3607,10 +3824,276 @@ namespace GluttonBalance
             return false;
         }
 
+        // ---------------------------------------------------------- 0.0.7 Qoder 两段式查询（PAT → jt- → usage）
+        /// <summary>Qoder base 地址：config.endpoint 是 base（可填国际版），空则国内默认；去掉尾部斜杠。</summary>
+        private static string QoderBase(ProviderConfig pc)
+        {
+            string raw = pc == null ? "" : (pc.Endpoint ?? "").Trim();
+            if (raw.Length == 0) raw = QoderDefaultEndpoint;
+            return raw.TrimEnd('/');
+        }
+
+        /// <summary>缓存键 = SHA-256(base + "\n" + PAT)：字典里只留哈希，不存明文 PAT。</summary>
+        private static string QoderCacheKey(string baseUrl, string pat)
+        {
+            using (SHA256 sha = SHA256.Create())
+            {
+                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(baseUrl + "\n" + pat));
+                StringBuilder sb = new StringBuilder(hash.Length * 2);
+                for (int i = 0; i < hash.Length; i++) sb.Append(hash[i].ToString("x2", CultureInfo.InvariantCulture));
+                return sb.ToString();
+            }
+        }
+
+        private static string QoderCachedToken(string key)
+        {
+            lock (s_qoderGate)
+            {
+                QoderToken hit;
+                if (!s_qoderTokens.TryGetValue(key, out hit) || hit == null || string.IsNullOrEmpty(hit.Token)) return "";
+                if (s_clock.ElapsedMilliseconds - hit.AtMs >= QoderTokenTtlMs)
+                {
+                    s_qoderTokens.Remove(key);
+                    return "";
+                }
+                return hit.Token;
+            }
+        }
+
+        private static void QoderRememberToken(string key, string token)
+        {
+            long now = s_clock.ElapsedMilliseconds;
+            lock (s_qoderGate)
+            {
+                // 条目很少（每家 provider 一条），顺手清掉过期项，避免长期运行堆积
+                if (s_qoderTokens.Count > 8)
+                {
+                    List<string> dead = new List<string>();
+                    foreach (KeyValuePair<string, QoderToken> kv in s_qoderTokens)
+                    {
+                        if (now - kv.Value.AtMs >= QoderTokenTtlMs) dead.Add(kv.Key);
+                    }
+                    for (int i = 0; i < dead.Count; i++) s_qoderTokens.Remove(dead[i]);
+                }
+                QoderToken entry = new QoderToken();
+                entry.Token = token;
+                entry.AtMs = now;
+                s_qoderTokens[key] = entry;
+            }
+        }
+
+        private static void QoderForgetToken(string key)
+        {
+            lock (s_qoderGate) { s_qoderTokens.Remove(key); }
+        }
+
+        /// <summary>失败文案：分类码 + 阶段（+ HTTP 状态）；绝不含响应体 / PAT / jt-。</summary>
+        private static string QoderError(string code, string stage, int status)
+        {
+            string detail = stage ?? "qoder";
+            if (status > 0) detail += " HTTP " + status.ToString(CultureInfo.InvariantCulture);
+            return code + " (" + detail + ")";
+        }
+
+        /// <summary>HTTP 状态 / 网络异常 → 分类码（沿用 Mac 侧 ERROR_CODES 口径，只用于日志与错误文案）。</summary>
+        private static string QoderCodeForStatus(int status, WebExceptionStatus webStatus)
+        {
+            if (status == 401 || status == 403) return "KEY_INVALID";
+            if (status == 404) return "ENDPOINT_NOT_FOUND";
+            if (status == 429) return "RATE_LIMITED";
+            if (status >= 500) return "SERVER_ERROR";
+            if (status > 0) return "UNKNOWN";
+            if (webStatus == WebExceptionStatus.Timeout) return "TIMEOUT";
+            if (webStatus == WebExceptionStatus.TrustFailure) return "TLS_ERROR";
+            return "NETWORK";
+        }
+
+        /// <summary>
+        /// PAT → jt-：POST {base}/api/v1/jobToken/exchange，body {"personal_token":"pt-…"}；
+        /// 响应取 token / job_token / jobToken 任一。交换 400/401/403 一律归 KEY_INVALID（规格 §4）。
+        /// </summary>
+        private static string ExchangeQoderJobToken(string baseUrl, string pat)
+        {
+            Dictionary<string, string> headers = new Dictionary<string, string>();
+            headers["Content-Type"] = "application/json";
+            headers["Accept"] = "application/json";
+            string body = "{\"personal_token\":" + Json.Quote(pat) + "}";
+            string resp;
+            try
+            {
+                resp = HttpPost(baseUrl + QoderExchangePath, headers, body, 12000, pat);
+            }
+            catch (ApiException ex)
+            {
+                int status = ex.Status;
+                if (status == 400 || status == 401 || status == 403)
+                {
+                    throw new ApiException(QoderError("KEY_INVALID", "qoder.exchange", status), status, ex.WebStatus);
+                }
+                throw new ApiException(
+                    QoderError(QoderCodeForStatus(status, ex.WebStatus), "qoder.exchange", status),
+                    status, ex.WebStatus);
+            }
+            Dictionary<string, object> root;
+            try { root = Json.AsObject(Json.Parse(resp)); }
+            catch (FormatException) { throw new ApiException(QoderError("PARSE_FAILED", "qoder.jobToken", 0)); }
+            if (root == null) throw new ApiException(QoderError("PARSE_FAILED", "qoder.jobToken", 0));
+            string token = QoderFirstString(root, "token", "job_token", "jobToken");
+            if (string.IsNullOrEmpty(token)) throw new ApiException(QoderError("PARSE_FAILED", "qoder.jobToken", 0));
+            return token;
+        }
+
+        private static string QoderFirstString(Dictionary<string, object> d, params string[] keys)
+        {
+            for (int i = 0; i < keys.Length; i++)
+            {
+                // 只认字符串值（对象/数字都不算令牌，避免把 JSON 结构转成字符串误用）
+                string v = Json.GetValue(d, keys[i]) as string;
+                if (!string.IsNullOrEmpty(v)) return v.Trim();
+            }
+            return "";
+        }
+
+        /// <summary>GET {base}/sash/api/v2/me/usage（Bearer jt-）；401 由调用方决定是否重换。</summary>
+        private static string QoderUsageGet(string baseUrl, string token)
+        {
+            Dictionary<string, string> headers = new Dictionary<string, string>();
+            headers["Authorization"] = "Bearer " + token;
+            headers["Accept"] = "application/json";
+            try
+            {
+                return HttpGet(baseUrl + QoderUsagePath, headers, 12000, token);
+            }
+            catch (ApiException ex)
+            {
+                throw new ApiException(
+                    QoderError(QoderCodeForStatus(ex.Status, ex.WebStatus), "qoder.usage", ex.Status),
+                    ex.Status, ex.WebStatus);
+            }
+        }
+
+        /// <summary>单池余额：remaining 优先；否则 total-used；读不懂按 0（规格 §2，单池异常不能让整次查询失败）。</summary>
+        private static double QoderPoolRemaining(Dictionary<string, object> pool)
+        {
+            if (pool == null) return 0;
+            double? remaining = Json.ToDoubleOrNull(Json.GetValue(pool, "remaining"));
+            if (remaining.HasValue && !double.IsNaN(remaining.Value) && !double.IsInfinity(remaining.Value))
+            {
+                return remaining.Value;
+            }
+            double? total = Json.ToDoubleOrNull(Json.GetValue(pool, "total"));
+            double? used = Json.ToDoubleOrNull(Json.GetValue(pool, "used"));
+            if (total.HasValue && used.HasValue
+                && !double.IsNaN(total.Value) && !double.IsNaN(used.Value)
+                && !double.IsInfinity(total.Value) && !double.IsInfinity(used.Value))
+            {
+                return total.Value - used.Value;
+            }
+            return 0;
+        }
+
+        /// <summary>汇总 userQuota + addOnQuota + orgResourcePackage；三池全缺 → NaN（调用方归 PARSE_FAILED qoder.quota）。</summary>
+        private static double QoderQuotaAmount(object parsed)
+        {
+            Dictionary<string, object> root = Json.AsObject(parsed);
+            if (root == null) return double.NaN;
+            Dictionary<string, object> usage = Json.AsObject(Json.GetValue(root, "qoderUsage"));
+            if (usage == null) usage = root; // 没有 qoderUsage 外层时 body 本身就是该对象
+            string[] pools = new string[] { "userQuota", "addOnQuota", "orgResourcePackage" };
+            int present = 0;
+            double sum = 0;
+            for (int i = 0; i < pools.Length; i++)
+            {
+                Dictionary<string, object> pool = Json.AsObject(Json.GetValue(usage, pools[i]));
+                if (pool == null) continue;
+                present++;
+                sum += QoderPoolRemaining(pool);
+            }
+            if (present == 0) return double.NaN;
+            // 四舍五入 2 位：先用 decimal 收掉二进制浮点尾差（82.345 → 82.35），再按远离零舍入（规格 §2）
+            decimal exact = (decimal)sum;
+            return (double)Math.Round(exact, 2, MidpointRounding.AwayFromZero);
+        }
+
+        /// <summary>
+        /// Qoder 余额：PAT（KeyLoader）→ jt-（20 分钟缓存）→ GET usage 汇总三池。
+        /// usage 401 强制重换一次再试；仍 401 归 KEY_INVALID。错误文案只带分类码，不带响应体/密钥。
+        /// </summary>
+        private static BalanceResult QueryQoder(ProviderConfig pc)
+        {
+            string pat = KeyLoader.Load(pc.KeySource);
+            if (string.IsNullOrEmpty(pat)) return BalanceResult.Fail("qoder: pat not found");
+            string baseUrl = QoderBase(pc);
+            string cacheKey = QoderCacheKey(baseUrl, pat);
+            try
+            {
+                string token = QoderCachedToken(cacheKey);
+                if (token.Length == 0)
+                {
+                    token = ExchangeQoderJobToken(baseUrl, pat);
+                    QoderRememberToken(cacheKey, token);
+                }
+                string body = null;
+                try
+                {
+                    body = QoderUsageGet(baseUrl, token);
+                }
+                catch (ApiException ex)
+                {
+                    if (ex.Status != 401) throw;
+                    // jt- 可能已失效：强制重换一次再试（重换后仍 401 → KEY_INVALID）
+                    QoderForgetToken(cacheKey);
+                    token = ExchangeQoderJobToken(baseUrl, pat);
+                    QoderRememberToken(cacheKey, token);
+                    try
+                    {
+                        body = QoderUsageGet(baseUrl, token);
+                    }
+                    catch (ApiException ex2)
+                    {
+                        if (ex2.Status == 401)
+                        {
+                            throw new ApiException(QoderError("KEY_INVALID", "qoder.usage", 401), 401, ex2.WebStatus);
+                        }
+                        throw;
+                    }
+                }
+                object parsed;
+                try { parsed = Json.Parse(body); }
+                catch (FormatException) { return BalanceResult.Fail(QoderError("PARSE_FAILED", "qoder.quota", 0)); }
+                double amount = QoderQuotaAmount(parsed);
+                if (double.IsNaN(amount)) return BalanceResult.Fail(QoderError("PARSE_FAILED", "qoder.quota", 0));
+                BalanceResult r = new BalanceResult();
+                r.Ok = true;
+                r.Amount = amount;
+                r.Currency = "CREDITS";
+                return r;
+            }
+            catch (ApiException ex)
+            {
+                return BalanceResult.Fail(ex.SafeMessage);
+            }
+            catch (UriFormatException)
+            {
+                return BalanceResult.Fail(QoderError("BAD_ENDPOINT", "qoder.endpoint", 0));
+            }
+        }
+
         internal static string HttpGet(string url, Dictionary<string, string> headers, int timeoutMs, string secretToRedact)
         {
+            return HttpRequest("GET", url, headers, null, timeoutMs, secretToRedact);
+        }
+
+        /// <summary>0.0.7：Qoder exchange 需要 POST；与 GET 共用同一套超时 / TLS / 错误分类 / 脱敏。</summary>
+        internal static string HttpPost(string url, Dictionary<string, string> headers, string body, int timeoutMs, string secretToRedact)
+        {
+            return HttpRequest("POST", url, headers, body, timeoutMs, secretToRedact);
+        }
+
+        private static string HttpRequest(string method, string url, Dictionary<string, string> headers, string bodyText, int timeoutMs, string secretToRedact)
+        {
             HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
-            req.Method = "GET";
+            req.Method = method;
             req.Timeout = timeoutMs;
             req.ReadWriteTimeout = timeoutMs;
             req.KeepAlive = false;
@@ -3621,11 +4104,18 @@ namespace GluttonBalance
                 foreach (KeyValuePair<string, string> kv in headers)
                 {
                     if (string.Equals(kv.Key, "Accept", StringComparison.OrdinalIgnoreCase)) req.Accept = kv.Value;
+                    else if (string.Equals(kv.Key, "Content-Type", StringComparison.OrdinalIgnoreCase)) req.ContentType = kv.Value;
                     else req.Headers[kv.Key] = kv.Value;
                 }
             }
             try
             {
+                if (!string.IsNullOrEmpty(bodyText))
+                {
+                    byte[] bytes = Encoding.UTF8.GetBytes(bodyText);
+                    req.ContentLength = bytes.Length;
+                    using (Stream ws = req.GetRequestStream()) ws.Write(bytes, 0, bytes.Length);
+                }
                 using (WebResponse resp = req.GetResponse())
                 using (Stream stream = resp.GetResponseStream())
                 using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
@@ -3660,7 +4150,7 @@ namespace GluttonBalance
                     if (snippet.Length > 160) snippet = snippet.Substring(0, 160);
                     msg += " " + Redact(snippet, secretToRedact);
                 }
-                throw new ApiException(msg);
+                throw new ApiException(msg, status, we.Status);
             }
         }
 

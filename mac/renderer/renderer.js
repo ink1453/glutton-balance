@@ -648,15 +648,57 @@
     return { nameCol: nameCol, valCol: valCol, shadowCol: shadowCol, dot: dot };
   }
 
-  /** Win BowlRenderer.ValueText：大白饭/断线/币种符号 + 两位小数。 */
+  /**
+   * 名称带：CREDITS 时把单位并进名称（木牌内宽约 40px，放不下整段「数值 Credits」；
+   * 明细卡等宽处仍用 valueText 的完整「2177.00 Credits」）。
+   */
+  function labelName(view) {
+    var name = view && view.name ? String(view.name) : '';
+    if (!name) return '';
+    // 2026-11-13 老板令：木牌上不写 "Credits" 字样，单位改成金额前的符号（见 CREDITS_SYMBOL）
+    return name;
+  }
+
+  /**
+   * 金额取整（老板 2026-11-13 令：「把小数点后去掉」）。
+   * 只影响**显示文本**，不影响任何阈值/液面/状态点判断——主进程算 low 用的是原始 amount。
+   * 四舍五入到个位：1626.7 → 1627、82.4 → 82。负数按绝对值舍入后补负号，避免 -0。
+   */
+  function moneyText(amount) {
+    var n = Number(amount);
+    if (!isFinite(n)) return '0';
+    var r = n < 0 ? -Math.round(-n) : Math.round(n);
+    if (r === 0) r = 0;  // 归一 -0
+    return String(r);
+  }
+
+  /** 木牌/饭票上的金额：CREDITS 只给整数数值（不带 ¥/$），单位由名称带标注。 */
+  function labelAmountText(view) {
+    if (!view) return '';
+    if (String(view.currency || 'CNY').toUpperCase() !== 'CREDITS') return valueText(view);
+    if (view.rice) return '盆满钵满';
+    if (!view.hasResult || !view.ok) return '连接失败';
+    var amount = Number(view.amount);
+    if (!isFinite(amount)) amount = 0;
+    return CREDITS_SYMBOL + moneyText(amount);
+  }
+  /** Credits 的符号（老板 2026-11-13 令：和 ¥/$ 一样放在金额前面，不写 Credits 字样）。 */
+  // 第 27 轮改：原用 ₡（U+20A1 科朗符号）。老板实测小卡片里「太粗、突兀」——根因是 PingFang SC
+  // 不含 U+20A1，系统回退到后备字体渲染，字重与旁边数字不匹配。改用拉丁大写 C + 一个空格：
+  // C = Credits 首字母，PingFang SC 原生自带，粗细与 ¥/$ 同档，不再被后备字体接管。
+  // 空格是必须的：不留空格时 C 与数字视觉粘连（C1642 易误读成标识符）。
+  var CREDITS_SYMBOL = 'C ';
+  /** Win BowlRenderer.ValueText：大白饭/断线/币种符号 + 两位小数；CREDITS 不带 ¥/$，单位写 Credits。 */
   function valueText(view) {
     if (!view) return '';
     if (view.rice) return '盆满钵满';
     if (!view.hasResult || !view.ok) return '连接失败';
-    var symbol = String(view.currency || 'CNY').toUpperCase() === 'USD' ? '$' : '¥';
+    var code = String(view.currency || 'CNY').toUpperCase();
     var amount = Number(view.amount);
     if (!isFinite(amount)) amount = 0;
-    return symbol + amount.toFixed(2);
+    if (code === 'CREDITS') return CREDITS_SYMBOL + moneyText(amount);
+    var symbol = code === 'USD' ? '$' : '¥';
+    return symbol + moneyText(amount);
   }
 
   // =========================================================================
@@ -933,7 +975,7 @@
 
   // =========================================================================
   // 7. 数值三条带：
-  //    L3 = 木牌（牌内 ¥ 金额 + 牌下刻字家名 + 中间绿点）
+  //    L3 = 木牌（牌内金额 + 牌下刻字家名 + 中间绿点）
   //    L1 = 无底板的盆沿小字（复用三条带）
   //    L2 = 饭票小旗（插在盆沿上方）
   // =========================================================================
@@ -994,8 +1036,8 @@
 
     var tagFill = drawWoodPlaque(ctx, t, tx, ty, tw, th, scale, lightBody);
 
-    // 金额：牌内只有 ¥金额；按对比度补齐可读性
-    var val = valueText(view);
+    // 金额：牌内只放数值（CREDITS 不带 ¥/$；单位见名称带）；按对比度补齐可读性
+    var val = labelAmountText(view);
     var amountPx = numOr(plaque.amountPx, Math.max(9, 9 * scale));
     var amountFloor = Math.max(9, amountPx * 0.70);
     var valAreaW = Math.max(4, tw - 6 * scale);
@@ -1021,7 +1063,7 @@
     recordText({ style: 'L3', slot: slot.index, amount: val, amountPx: +fitV.px.toFixed(2), amountBasePx: amountPx, amountClip: valClip });
 
     // 家名：刻在木牌下方碗身上（暗 + 亮 + 本色三遍偏移刻痕）
-    var name = view && view.name ? String(view.name) : '';
+    var name = labelName(view);
     if (name) {
       var namePx = numOr(plaque.namePx, Math.max(8, 8 * scale));
       var off = Math.max(0.6, 0.7 * scale);
@@ -1068,7 +1110,7 @@
     var bottom = slot.bottom;
 
     // 名称带
-    var name = view && view.name ? String(view.name) : '';
+    var name = labelName(view);
     if (name) {
       var off = Math.max(0.6, 0.7 * scale);
       var nameMaxW = numOr(plaque.nameMaxWidth, 0);
@@ -1089,7 +1131,7 @@
     drawStatusDot(ctx, cx, dcy, dotD, lc.dot, scale);
 
     // 数值：居中在 valueCenterY（= L3 木牌带中心），缩字保证完整显示
-    var val = valueText(view);
+    var val = labelAmountText(view);
     var areaW = Math.max(8, slot.bowlW - 4 * scale);
     var fitV = fitShrink(ctx, val, valPx, areaW, Math.max(7, valPx * 0.75), 'bold', 0.25);
     if (fitV.w > areaW + 0.5) fitV = fitShrink(ctx, val, fitV.px, areaW, 6, 'bold', 0.25);
@@ -1116,8 +1158,8 @@
     var lightBody = !!(bowl && bowl.lightBody);
     var lc = labelColors(view, lightBody, t);
     var plaque = slot.plaque || {};
-    var name = view && view.name ? String(view.name) : '';
-    var val = valueText(view);
+    var name = labelName(view);
+    var val = labelAmountText(view);
 
     var baseNamePx = Math.max(8, 8 * scale);
     var baseValPx = Math.max(9, 9 * scale);
@@ -1288,6 +1330,18 @@
         };
       });
     }
+    // 主进程 buildDetail 的 amountText 只认 ¥/$；CREDITS 行在渲染层按 currency 复算（CNY/USD 原样不动）
+    if (rows.length && state.views && state.views.length) {
+      rows = rows.map(function (row, i) {
+        var v = state.views[i];
+        if (!v || (row.name && v.name !== row.name)) return row;
+        if (String(v.currency || 'CNY').toUpperCase() !== 'CREDITS') return row;
+        var copy = {};
+        for (var k in row) copy[k] = row[k];
+        copy.amountText = valueText(v);
+        return copy;
+      });
+    }
     var title = detail.title != null ? String(detail.title) : '余额明细 · 点击面板收起';
     var footer = detail.footer != null ? String(detail.footer) : '窗口置顶 · 点击面板收起';
 
@@ -1366,6 +1420,166 @@
   }
 
   // =========================================================================
+  // 第 27 轮 · 第三种形态：minicard（macOS 毛玻璃小面板）
+  //   老板：「增加一种显示方式，用一个小面板显示，信息集成高，适合 mac 端小屏幕使用，
+  //          ui 风格就用 macos 目前这个版本的」。
+  //   已确认口径：竖排小卡片（一行一家，左家名右金额、固定宽度）+ 家名/金额/状态点
+  //              + macOS 毛玻璃卡片（圆角+半透明+细描边）+ 跟着桌宠（几何由 layout.js 给）。
+  //   ⚠️ 与 vibrancy 的关系：若窗口开了原生 vibrancy（需改 main.js，当前未开），token.mc.fill
+  //      会自动降到极淡色调（见 style.js MINICARD_NATIVE_VIBRANCY），此函数无需改动。
+  // =========================================================================
+
+  /** minicard 的 token：优先用主进程给的 style.mc（style.js 产出），缺失时按主题兜底。 */
+  function minicardTokens(state) {
+    var raw = state && state.style;
+    if (raw && raw.mc && typeof raw.mc === 'object') return raw.mc;
+    var light = !!(raw && (raw.light === true || String(raw.theme || '').toLowerCase() === 'light'));
+    // 兜底与 style.js buildMinicardStyle 同值（两边必须一致，改一处要同步）
+    return light
+      ? {
+          light: true, dotOk: 'rgba(40,205,65,1)', dotWarn: 'rgba(255,149,0,1)', dotFail: 'rgba(255,59,48,1)',
+          dotIdle: 'rgba(142,142,147,1)', border: 'rgba(0,0,0,0.09)', innerTop: 'rgba(255,255,255,0.62)',
+          divider: 'rgba(0,0,0,0.06)', shadow: 'rgba(0,0,0,0.14)', name: 'rgba(0,0,0,0.86)',
+          amount: 'rgba(0,0,0,0.94)', amountLow: 'rgba(255,149,0,1)', amountFail: 'rgba(0,0,0,0.42)',
+          amountRice: 'rgba(146,100,20,0.95)', fill: 'rgba(255,255,255,0.55)', fillTop: 'rgba(255,255,255,0.72)',
+        }
+      : {
+          light: false, dotOk: 'rgba(48,209,88,1)', dotWarn: 'rgba(255,159,10,1)', dotFail: 'rgba(255,69,58,1)',
+          dotIdle: 'rgba(152,152,157,1)', border: 'rgba(255,255,255,0.14)', innerTop: 'rgba(255,255,255,0.16)',
+          divider: 'rgba(255,255,255,0.07)', shadow: 'rgba(0,0,0,0.38)', name: 'rgba(255,255,255,0.92)',
+          amount: 'rgba(255,255,255,0.98)', amountLow: 'rgba(255,159,10,1)', amountFail: 'rgba(255,255,255,0.45)',
+          amountRice: 'rgba(255,214,140,0.96)', fill: 'rgba(28,28,32,0.55)', fillTop: 'rgba(255,255,255,0.12)',
+        };
+  }
+
+  /** 一行的状态 → 点色与金额色。优先级：饭(米色) > 失败/无结果(灰) > 低余额(橙) > 成功(绿)。 */
+  function minicardRowColors(view, mc) {
+    if (!view) return { dot: mc.dotIdle, amount: mc.amountFail };
+    if (view.rice) return { dot: mc.dotOk, amount: mc.amountRice, rice: true };
+    var okState = !!view.hasResult && !!view.ok;
+    if (!okState) return { dot: mc.dotFail, amount: mc.amountFail };
+    if (view.low) return { dot: mc.dotWarn, amount: mc.amountLow };
+    return { dot: mc.dotOk, amount: mc.amount };
+  }
+
+  /**
+   * 画小面板：一张圆角毛玻璃卡片 + n 行 (状态点 家名 ... 金额)。
+   * 几何全部读 lay.mc（layout.js 算好的），这里只负责画，不自己算尺寸 —— 保证
+   * layout 的单测能覆盖几何、渲染层不会偷偷改口径。
+   */
+  function drawMinicard(ctx, state, dpr) {
+    var lay = state.layout || {};
+    var mc = lay.mc;
+    var mct = minicardTokens(state);
+    var views = state.views || [];
+    if (!mc || !(mc.cardW > 0) || !(mc.cardH > 0)) return;
+
+    var scale = numOr(lay.dpiScale, 1) || 1;
+    var W = mc.cardW, H = mc.cardH;
+    var rad = Math.max(2, numOr(mc.radius, 14));
+
+    // ---- 卡面：半透明底 + 顶部内高光 + 1px 细描边（macOS 毛玻璃三件套）----
+    // 阴影用 canvas shadowBlur 画在卡外，模拟 macOS 的柔和落影（窗口本身 hasShadow:false）
+    ctx.save();
+    ctx.shadowColor = mct.shadow;
+    ctx.shadowBlur = Math.max(4, 12 * scale);
+    ctx.shadowOffsetY = Math.max(1, 2 * scale);
+    fillRoundRect(ctx, 1, 1, W - 2, H - 2, rad, mct.fill);
+    ctx.restore();
+
+    // 顶部高光：一条从顶部渐隐的白，制造玻璃受光面
+    ctx.save();
+    roundRectPath(ctx, 1, 1, W - 2, H - 2, rad);
+    ctx.clip();
+    var gloss = ctx.createLinearGradient(0, 0, 0, Math.max(2, H * 0.55));
+    gloss.addColorStop(0, mct.fillTop);
+    gloss.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = gloss;
+    ctx.fillRect(0, 0, W, Math.max(2, H * 0.55));
+    ctx.restore();
+
+    // 细描边（半像素对齐，1px 视觉宽度）
+    strokeRoundRect(ctx, 0.5, 0.5, W - 1, H - 1, rad, mct.border, Math.max(1, scale));
+
+    // ---- 行 ----
+    var rows = mc.rows || [];
+    for (var i = 0; i < rows.length; i++) {
+      var row = rows[i] || {};
+      var view = views[numOr(row.index, i)] || null;
+      var col = minicardRowColors(view, mct);
+      var rowCy = numOr(row.cy, 0);
+
+      // 状态点：macOS 系统色实心圆 + 极淡描边（不加饭桶那套高光/灯座，小面板要干净）
+      var dotD = numOr(mc.dotD, 8);
+      var dcx = numOr(row.dotCx, 20);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(dcx, rowCy, Math.max(1, dotD / 2), 0, Math.PI * 2);
+      ctx.fillStyle = col.dot;
+      ctx.fill();
+      if (scale >= 1.5) {
+        ctx.strokeStyle = mct.light ? 'rgba(0,0,0,0.12)' : 'rgba(0,0,0,0.28)';
+        ctx.lineWidth = Math.max(0.5, 0.6 * scale);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // 家名（左对齐，放不下先缩字号再中间省略 —— 复用饭桶同一套 fitName，口径一致）
+      var name = (view && view.name != null) ? String(view.name) : String(row.name || '');
+      var namePx = numOr(mc.namePx, 13);
+      var nameMaxW = numOr(mc.nameMaxW, 80);
+      var nameFit = fitName(ctx, name, namePx, nameMaxW, Math.max(7, namePx * 0.85), 'normal');
+      var textX = numOr(row.textX, 31);
+      drawText(ctx, nameFit.text || name, {
+        x: textX, cy: rowCy, align: 'left',
+        px: nameFit.px || namePx, weight: 'normal', color: mct.name,
+      });
+      var nameW = measureText(ctx, nameFit.text || name, nameFit.px || namePx, 'normal');
+      recordText({
+        part: 'mc-name', text: nameFit.text || name, px: nameFit.px || namePx,
+        left: textX, right: textX + nameW, cy: rowCy, row: i,
+        ellipsized: !!nameFit.ellipsized,
+      });
+
+      // 金额（右对齐；CREDITS 走 'C ' 前缀，与饭桶 labelAmountText 同一口径）
+      var amount = labelAmountText(view);
+      var amountPx = numOr(mc.amountPx, 13);
+      var amountMaxW = numOr(mc.amountMaxW, 80);
+      var amountRight = numOr(row.amountRight, W - 16);
+      var amountFit = fitShrink(ctx, amount, amountPx, amountMaxW, Math.max(7, amountPx * 0.85), 'bold');
+      var amountShown = amount; // fitShrink 只回字号+宽度，文本原样按缩小后的字号画
+      // fitShrink 只缩字号不省略；极端长金额仍放不下时按尾部省略兜底（永不溢出卡面）
+      if (amountFit.ellipsized) {
+        var e = ellipsizeEnd(ctx, amount, amountFit.px, 'bold', amountMaxW);
+        amountShown = e;
+      }
+      drawText(ctx, amountShown, {
+        x: amountRight, cy: rowCy, align: 'right',
+        px: amountFit.px || amountPx, weight: 'bold', color: col.amount,
+      });
+      var amountW = measureText(ctx, amountShown, amountFit.px || amountPx, 'bold');
+      recordText({
+        part: 'mc-amount', text: amountShown, px: amountFit.px || amountPx,
+        left: amountRight - amountW, right: amountRight, cy: rowCy, row: i,
+        shrunk: !!amountFit.shrunk, cardRight: W, padX: numOr(mc.padX, 16),
+      });
+
+      // 行分隔线（最后一行不画，与 macOS 列表口径一致）
+      if (i + 1 < rows.length) {
+        ctx.save();
+        ctx.strokeStyle = mct.divider;
+        ctx.lineWidth = Math.max(0.5, 0.6 * scale);
+        ctx.beginPath();
+        var divY = Math.round(numOr(row.top, 0) + numOr(mc.rowH, 30)) - 0.5;
+        ctx.moveTo(numOr(mc.padX, 16), divY);
+        ctx.lineTo(W - numOr(mc.padX, 16), divY);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  // =========================================================================
   // 10. render（全量重画）+ hitTest（alpha 掩码）
   // =========================================================================
   function getDpr(state) {
@@ -1426,7 +1640,12 @@
     ctx.textBaseline = 'alphabetic';
 
     try {
-      if (mode === 'detail') drawDetail(ctx, state, dpr);
+      // 第 27 轮 · 第三种形态 minicard：style==='minicard' 走小面板，其余完全维持原路径
+      // （ricebowl / capsule 回退 / detail 一个字节都不变）
+      var minicardMode = !!(state.layout && String(state.layout.style || '').toLowerCase() === 'minicard')
+        || String((state.cfg && state.cfg.display && state.cfg.display.style) || '').toLowerCase() === 'minicard';
+      if (minicardMode && mode !== 'detail') drawMinicard(ctx, state, dpr);
+      else if (mode === 'detail') drawDetail(ctx, state, dpr);
       else drawBowlsGroup(ctx, state, dpr);
     } catch (err) {
       bridgeLog('render error: ' + (err && err.message ? err.message : String(err)));

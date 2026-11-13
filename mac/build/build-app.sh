@@ -40,7 +40,7 @@ APP_SRC="${APP_SRC:-$PROJECT_ROOT}"
 OUT="${OUT:-$BUILD_DIR/dist/饭桶余额.app}"
 APP_NAME="饭桶余额"
 # 发布版本：与 app-mac/package.json / repo/mac/package.json 保持同号（发布新版改这一处）
-APP_VERSION="0.0.6"
+APP_VERSION="0.0.7"
 # bundle id：必须与已安装 App / LaunchAgent / 文档一致（2026-11-02 改名定稿：glutton-balance）
 APP_BUNDLE_ID="com.gluttonbalance.panel"
 # 签名身份：老板 2026-11-01 定的硬规矩——打包/重签一律用本机自签证书，不再用 ad-hoc（-）
@@ -151,6 +151,28 @@ for item in main.js preload.js permission.html src renderer assets native; do
 done
 ok "已注入：$injected"
 
+# 进包清单：共享核心（第 27 轮新增）
+# src/{config,providers,shake}.js 是薄壳，实现都在工作区根 shared/ 里，写的是 require('../../shared/xxx')。
+# 注意路径数学：包内 src/x.js 相对 ../../ 解析到 Contents/Resources/shared（不是 Resources/app/shared），
+# 所以必须放到 $RES/shared，放错位置打包不报错、运行时才 Cannot find module。
+SHARED_SRC="${SHARED_SRC:-$PROJECT_ROOT/../shared}"
+if [ -d "$SHARED_SRC" ]; then
+  rm -rf "$RES/shared"
+  ditto "$SHARED_SRC" "$RES/shared" || die "注入 shared 失败"
+  # 只保留 .js，别把 .tmp/.bak 之类带进包（复用后面的通用剔除，这里先删一遍明显的）
+  find "$RES/shared" \( -name '*.bak' -o -name '*.bak-*' -o -name '*.orig' -o -name '*.log' \) -delete 2>/dev/null || true
+  injected="$injected shared"
+  ok "已注入共享核心 shared/ → Contents/Resources/shared（${SHARED_SRC}）"
+else
+  # 自测包（--dummy）没有 shared/ 目录是正常的；但正式包缺了就是致命错
+  case "$APP_SRC" in
+    */build/dummy) : ;;
+    *) die "缺少共享核心目录：${SHARED_SRC}
+   src/*.js 会 require('../../shared/…')，缺它打包出来的 app 起不来。
+   若确实不需要共享核心，请显式指定 SHARED_SRC=<目录> 或修 build/dummy 自测路径。" ;;
+  esac
+fi
+
 # 开发期目录/测试工具全部剔除（主程序不需要，扫描也不许有）
 for junk in build tools docs test tests node_modules .git .github .DS_Store; do
   rm -rf "$RES/app/$junk" 2>/dev/null || true
@@ -216,6 +238,29 @@ for f in $REQUIRED; do
   [ -e "$RES/app/$f" ] || die "进包缺文件：$f"
 done
 ok "关键文件齐全（${REQUIRED}）"
+
+# 共享核心进包核对（第 27 轮）：不只查文件在不在，还要真按 Node 的解析规则验一遍
+# —— 只查文件存在会漏掉「放错层级」这种错（放 Resources/app/shared 文件也在，但 require 解析不到）。
+if [ "$DUMMY" -eq 0 ]; then
+  [ -f "$RES/shared/providers-core.js" ] || die "进包缺 shared/providers-core.js（src/providers.js 会 require 不到）"
+  [ -f "$RES/shared/config-core.js" ]    || die "进包缺 shared/config-core.js（src/config.js 会 require 不到）"
+  [ -f "$RES/shared/shake.js" ]          || die "进包缺 shared/shake.js"
+  # 真解析：模拟包内 src/config.js 的 require('../../shared/config-core') 落到哪个绝对路径
+  RESOLVED="$(cd "$RES" && node -e '
+    const path = require("path");
+    const from = path.join(process.cwd(), "app", "src", "config.js");
+    process.stdout.write(path.resolve(path.dirname(from), "../../shared/config-core"));
+  ' 2>/dev/null)"
+  [ -f "${RESOLVED}.js" ] || die "共享核心解析位置不对：包内 src/config.js 的 require 会解析到 ${RESOLVED}.js（不存在）
+   实际应位于 Contents/Resources/shared/（不是 Contents/Resources/app/shared/）"
+  ok "共享核心进包可被 require 解析（${RESOLVED}.js 存在）"
+  # 每个薄壳都真加载一遍：能在包内环境 require 成功才算过关
+  for shell in config providers shake; do
+    ( cd "$RES/app" && node -e "require('./src/$shell')" >/dev/null 2>&1 ) \
+      || die "包内薄壳 src/${shell}.js 加载失败（共享核心没进包或路径不对）"
+  done
+  ok "包内三个薄壳（config/providers/shake）均可加载"
+fi
 
 # ---------- 4. 放图标 + 改 Info.plist ----------
 step "4/6 改 Info.plist（名字 / bundle id / LSUIElement / 版本 / 图标）"

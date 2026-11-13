@@ -19,7 +19,7 @@ const logger = require('./src/logger');
 
 const APP_ROOT = __dirname;
 const APP_NAME = '饭桶余额';
-const APP_VERSION = '0.0.6';
+const APP_VERSION = '0.0.7';
 const ASSETS_DIR = path.join(APP_ROOT, 'assets');
 const RENDERER_HTML = process.env.PBP_RENDERER || path.join(APP_ROOT, 'renderer', 'index.html');
 const PRELOAD = path.join(APP_ROOT, 'preload.js');
@@ -833,12 +833,26 @@ async function pollPetState() {
 }
 
 // ---------------- 状态构建 ----------------
+// 0.0.7：金额一律取整（老板 2026-11-13「把小数点后去掉」，两处都改）。
+// 口径与 renderer/renderer.js 的 moneyText() 完全一致，避免明细卡与主显示窗数字打架。
+// 积分符号由 ₡ 改 'C '：U+20A1 在 PingFang SC 里缺字，会掉到系统回退字体、字重明显不匹配。
+function moneyText(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '0';
+  // 负数按「远离零」四舍五入、并把 -0 归一成 0 —— 与 renderer/renderer.js 的 moneyText 逐字一致，
+  // 否则两端对同一笔余额会显示不同的数字（Math.round(-0.5) === -0）。
+  let r = n < 0 ? -Math.round(-n) : Math.round(n);
+  if (r === 0) r = 0;
+  return String(r);
+}
 function amountText(v) {
   if (v.rice) return '盆满钵满';
   if (!v.hasResult || !v.ok) return '连接失败';
-  const sym = (v.currency === 'USD') ? '$' : '¥';
-  const n = Number(v.amount);
-  return sym + (Number.isFinite(n) ? n.toFixed(2) : '0.00');
+  const cur = String(v.currency || 'CNY').toUpperCase();
+  const num = moneyText(v.amount);
+  // Qoder 这类积分源不是钱：2177 Credits，不加 ¥/$
+  if (cur === 'CREDITS') return 'C ' + num;
+  return ((cur === 'USD') ? '$' : '¥') + num;
 }
 
 // ---------------- #4（0.0.4 二阶段）失败分类文案 · 用户可见面接入 ----------------
@@ -856,7 +870,10 @@ function failureReasonText(v) {
 /** 明细卡某一行副标题（失败行带分类原因；成功/等待不变）。 */
 function detailSubText(v) {
   if (!v || v.rice) return '大白饭档 · 不联网 · 永远盆满钵满';
-  const th = (v.threshold == null) ? '不设低额提醒' : ('低于 ¥' + Number(v.threshold).toFixed(2) + ' 变红');
+  const credits = String(v.currency || '').toUpperCase() === 'CREDITS';
+  const th = (v.threshold == null) ? '不设低额提醒'
+    : (credits ? ('低于 ' + moneyText(v.threshold) + ' Credits 变红')
+               : ('低于 ¥' + moneyText(v.threshold) + ' 变红'));
   let recent = '等待刷新';
   if (v.hasResult && v.ok) recent = '成功';
   else if (v.hasResult) recent = '失败：' + failureReasonText(v);

@@ -23,7 +23,7 @@ if (-not (Test-Path $src2)) { throw "找不到 Panel.V3.cs：$src2" }
 
 if ($LASTEXITCODE -ne 0) { throw "编译失败，csc 退出码 $LASTEXITCODE" }
 $fi = Get-Item $out
-# 0.0.6：顺带打印 exe 版本资源，便于核对「同号 0.0.6」（版本元数据在 Panel.cs 的 assembly 属性里）
+# 0.0.7：顺带打印 exe 版本资源，便于核对「同号 0.0.7」（版本元数据在 Panel.cs 的 assembly 属性里）
 $ver = $fi.VersionInfo.FileVersion
 Write-Host ("编译成功：{0}（{1:N0} 字节）版本 {2}" -f $fi.FullName, $fi.Length, $ver)
-if ($ver -notlike '0.0.6*') { throw "版本资源异常：期望 0.0.6.x，实际 $ver" }
+if ($ver -notlike '0.0.7*') { throw "版本资源异常：期望 0.0.7.x，实际 $ver" }

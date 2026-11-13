@@ -9,6 +9,25 @@ const ROW_RATIO = 0.80;           // 一排紧凑档
 const BOWL_PIXEL_W = 320;         // 内置盆 PNG 宽
 const BOWL_PIXEL_H = 290;         // 内置盆 PNG 高
 
+// ---------------- 第 27 轮 · 第三种形态 minicard（macOS 毛玻璃小面板） ----------------
+// 老板 2026-11-13 06:5x：「增加一种显示方式，用一个小面板显示，信息集成高，适合 mac 端小屏幕使用，
+//   ui 风格就用 macos 目前这个版本的」。已确认：竖排小卡片（一行一家，左家名右金额、固定宽度）+
+//   家名/金额/状态点 + macOS 毛玻璃卡片 + 跟着桌宠（与饭碗同一定位逻辑，故本函数只给几何，定位仍走 main.js）。
+// 数值全部以「gs=1 时」为基准，实际按 px=gs*dpiScale 等比放大 —— 这样桌宠变大面板也变大。
+// 硬下限与 computeLayout 既有口径一致写成「原值 * K」，避免 sizePct 缩小时「卡小了字没小」。
+const MC_RATIO = 2.8;             // 卡宽 = 桌宠实测宽 × 2.8（与「盆宽 = 桌宠宽 × 0.80」同源思路）
+const MC_ROW_H = 30.0;            // 行高 30pt
+const MC_PAD_X = 16.0;            // 卡片左右内边距 16pt
+const MC_PAD_Y = 10.0;            // 卡片上下内边距
+const MC_RADIUS = 14.0;           // 圆角 14pt
+const MC_NAME_PX = 13.0;          // 家名字号 13px
+const MC_AMOUNT_PX = 13.0;        // 金额字号 13px
+const MC_DOT = 8.0;               // 状态点直径
+const MC_DOT_GAP = 7.0;           // 状态点与文字的间距
+const MC_MID_GAP = 8.0;           // 家名区与金额区之间的最小空隙
+const MC_MIN_W = 168.0;           // 卡宽下限（保证 ¥987654.32 这种长金额放得下）
+const MC_MAX_W = 460.0;           // 卡宽上限
+
 const DEFAULT_ASSET = {
   id: 'porcelain', pixelW: 320, pixelH: 290,
   rice: { x: 44, y: 8, w: 232, h: 276 }, rimY: 54, rimBottom: 80,
@@ -39,9 +58,15 @@ function pyramidCounts(n) {
  * 2026-11-01 07:24 老板拍板「匹配比例」：传入实测角色宽 charWpt 时，
  * 按 Win 口径「盆宽 = 角色宽 × 0.80」反推 graphicsScale = charWpt / DESIGN_PET_W（77pt）。
  * 这样碗的大小始终按屏幕里桌宠的实际大小等比匹配（以前只按 /api/state scale 算，Mac 上偏小一档）。
+ *
+ * 第 27 轮「缩小 30%」：在自动匹配之上再乘整体倍率 K = sizePct/100（默认 1.00 → 结果与第 26 轮逐字节一致）。
+ * ⚠️ 只乘 K 不够：computeLayout / computePlaque 里还有若干硬下限（盆宽 46、盆高 8、间距 4、
+ * 字号 8/9、plaqueScale 0.5 …），若不按 K 同比放开就会出现「碗小了字没小」的挤压丑态。
+ * 因此 K 同时通过 sizeScaleOf() 暴露给下游，所有硬下限统一写成「原值 * K」。
  */
 function graphicsScale(cfg, petScale, charWpt) {
   const d = (cfg && cfg.display) || {};
+  const k = sizeScaleOf(cfg);
   let ref = Number(d.petScaleRef);
   if (!Number.isFinite(ref) || ref < 0.2) ref = 1.05;
   let lo = Number(d.graphicsMin);
@@ -50,11 +75,19 @@ function graphicsScale(cfg, petScale, charWpt) {
   let hi = Number(d.graphicsMax);
   if (!Number.isFinite(hi) || hi < lo) hi = 2.0;
   if (Number.isFinite(charWpt) && charWpt > 20) {
-    return clamp(charWpt / DESIGN_PET_W, lo, hi);
+    return clamp(charWpt / DESIGN_PET_W, lo, hi) * k;
   }
   let ps = Number(petScale);
   if (!Number.isFinite(ps) || ps <= 0) ps = 1.05;
-  return clamp(ps / ref, lo, hi);
+  return clamp(ps / ref, lo, hi) * k;
+}
+
+/** 整体缩放倍率 K = sizePct/100（缺省/非法 → 1.00，保证零变化）。 */
+function sizeScaleOf(cfg) {
+  const d = (cfg && cfg.display) || {};
+  const pct = Number(d.sizePct);
+  if (!Number.isFinite(pct) || pct <= 0) return 1;
+  return pct / 100;
 }
 
 function isHead(cfg) {
@@ -63,6 +96,146 @@ function isHead(cfg) {
 
 function isRicebowl(cfg) {
   return !(cfg && cfg.display && cfg.display.style === 'capsule');
+}
+
+/** 第 27 轮 · 是否为小面板（minicard）形态。大小写不敏感（与 config-core 口径一致，但不 trim）。 */
+function isMinicard(cfg) {
+  const s = cfg && cfg.display && cfg.display.style;
+  return typeof s === 'string' && s.toLowerCase() === 'minicard';
+}
+
+/**
+ * 小面板几何（全部逻辑点，未乘 dpr；渲染层再按 dpr 缩放）。
+ * 竖排小卡片：一行一家，左家名、右金额、中间状态点，固定宽度。
+ * 宽度跟桌宠走（MC_RATIO × 桌宠实测宽），但夹在 [MC_MIN_W, MC_MAX_W] 内，
+ * 保证「小屏幕不占地方」和「长金额不溢出」两个都不破。
+ *
+ * 关键：金额列宽不是猜的，用与渲染器同一套字符宽度估算回算出「最长金额」的宽度，
+ * 再反推卡宽 —— 这样 ¥987654 / C 2016 这类都能放得下（0.0.7 起金额不带小数），且布局层先算好给渲染层用。
+ */
+function computeMinicard(cfg, n, dpiScale, gs, viewNames) {
+  dpiScale = (dpiScale > 0) ? dpiScale : 1;
+  gs = (gs > 0.2) ? gs : 1.0;
+  const px = gs * dpiScale;
+  const K = sizeScaleOf(cfg);
+  const names = Array.isArray(viewNames) ? viewNames : [];
+
+  // 卡宽：优先跟桌宠（MC_RATIO × DESIGN_PET_W × px），再按行内容需求抬高。
+  // 第 27 轮修：基础卡宽与上限都随 K 等比缩放，且内容需求 needW 一并作为下限，
+  // 否则高缩放（sizePct>100）时卡宽增长跟不上字号增长，家名被挤成省略号。
+  const needW = minicardContentWidth(names, px, K);
+  let cardW = MC_RATIO * DESIGN_PET_W * px * K;
+  const loW = Math.max(ri(MC_MIN_W * K), needW);
+  const hiW = Math.max(ri(MC_MAX_W * K), needW);
+  cardW = clamp(ri(cardW), loW, hiW);
+  if (cardW < needW) cardW = needW;
+
+  // 第 27 轮修：卡宽 clamp 早先乘了 K（sizePct 生效），但行高/内边距/字号没乘，
+  // 结果 sizePct<100 时「卡缩小、内容不缩」，家名列被挤到下限、名字全成省略号。
+  // 现在所有纵向与文字几何统一乘 K，卡面整体等比缩放。
+  const rowH = ri(MC_ROW_H * px * K);
+  const padX = ri(MC_PAD_X * Math.max(0.85, gs) * dpiScale * K);
+  const padY = ri(MC_PAD_Y * Math.max(0.85, gs) * dpiScale * K);
+  const radius = ri(MC_RADIUS * Math.max(0.85, gs) * dpiScale * K);
+  const dotD = Math.max(4, ri(MC_DOT * Math.max(0.85, gs) * dpiScale * K));
+  const dotGap = ri(MC_DOT_GAP * Math.max(0.85, gs) * dpiScale * K);
+  const namePx = Math.max(8 * K, MC_NAME_PX * px * K);
+  const amountPx = Math.max(8 * K, MC_AMOUNT_PX * px * K);
+
+  const cardH = padY * 2 + rowH * n;
+  const lay = {
+    style: 'minicard',
+    count: n, dpiScale, graphicsScale: gs, asset: DEFAULT_ASSET,
+    compact: false, pyramid: false, twoRows: false,
+    bowlW: 0, bowlH: 0, gap: 0, groupW: cardW, groupH: cardH, wheelH: 0,
+    frontCount: 0, rowShift: 0, rowCounts: [n], slots: [],
+    capsuleW: 0, capsuleH: 0, step: 0,
+    // —— minicard 专属几何（渲染层只读这些，不再自己算尺寸）——
+    mc: {
+      cardW, cardH, rowH, padX, padY, radius, dotD, dotGap,
+      namePx, amountPx,
+      // 家名列可用宽度 / 金额列可用宽度（两列互斥，中间留 MC_MID_GAP）
+      midGap: ri(MC_MID_GAP * Math.max(0.85, gs) * dpiScale * K),
+      nameMaxW: 0, amountMaxW: 0,
+      rows: [],
+    },
+  };
+  const midGap = lay.mc.midGap;
+  // 金额列固定占「最长金额」宽度（右对齐），家名占剩下的（左对齐）
+  const amountW = minicardAmountWidth(px, K);
+  lay.mc.amountMaxW = amountW;
+  lay.mc.nameMaxW = Math.max(12, cardW - padX * 2 - dotD - dotGap - midGap - amountW);
+
+  for (let i = 0; i < n; i++) {
+    const rowTop = padY + rowH * i;
+    lay.mc.rows.push({
+      index: i,
+      name: names[i] != null ? String(names[i]) : '',
+      top: rowTop,
+      cy: rowTop + rowH / 2,
+      // 状态点圆心（家名左侧）
+      dotCx: padX + dotD / 2,
+      // 家名左边界
+      textX: padX + dotD + dotGap,
+      // 金额右边界
+      amountRight: cardW - padX,
+    });
+    lay.slots.push({
+      index: i, x: padX, y: rowTop, w: cardW - padX * 2, h: rowH,
+      cx: cardW / 2, cy: rowTop + rowH / 2,
+    });
+  }
+  return lay;
+}
+
+/** 小面板「金额列」最宽需要多少：按最长金额文本估算（保守，宁宽不溢）。K = sizePct/100，随缩放一起变。 */
+function minicardAmountWidth(px, K) {
+  // 最长金额形态：符号 + 7 位整数（C 1234567）——第 27 轮老板令去掉小数后无「.00」。
+  // 7 位是「Credits 余额极端上界」；再长由渲染层缩字号/尾部省略兜底，永不溢出卡面。
+  // 第 27 轮改两次：① 符号 ₡ → 'C '（渲染层 CREDITS_SYMBOL 同步）；② 去掉小数位。
+  // 探测串必须与渲染层实际输出形态一致，否则金额列宽算偏。保留 .89 作上界余量也可以，
+  // 但会让卡宽偏胖，这里按实际形态取「C + 7 位整数」。
+  const k = (K > 0) ? K : 1;
+  const probe = 'C 1234567';
+  return ri(estimateTextW(probe, MC_AMOUNT_PX * px * k, 'bold') + 1);
+}
+
+/** 小面板「内容需求宽度」：状态点 + 家名 + 间隙 + 金额列 + 内边距。 */
+function minicardContentWidth(names, px, K) {
+  const k = (K > 0) ? K : 1;
+  let nameW = 0;
+  for (let i = 0; i < names.length; i++) {
+    const w = estimateTextW(String(names[i] == null ? '' : names[i]), MC_NAME_PX * px * k, 'normal');
+    if (w > nameW) nameW = w;
+  }
+  // 家名最长可到 120pt（超出走中间省略），这里只保证「典型家名不被压」
+  nameW = Math.min(nameW, 120 * px * k);
+  const g = Math.max(0.85, px) * k;
+  const dotD = MC_DOT * g, dotGap = MC_DOT_GAP * g, midGap = MC_MID_GAP * g;
+  const padX = MC_PAD_X * g;
+  return ri(padX * 2 + dotD + dotGap + nameW + midGap + minicardAmountWidth(px, k));
+}
+
+/**
+ * 文本宽度估算（不依赖 canvas，纯布局用）。
+ * 与渲染器 FONT_FAMILY 同族的粗估：PingFang 小字号下 ASCII 数字/字母 ≈ 0.58em、
+ * 货币符号 ≈ 0.62em、中文 ≈ 1.0em。只用于「算卡宽」，最终绘制仍由 canvas measureText 决定，
+ * 所以这里宁可高估 6%，保证布局留够地方永不溢出。
+ */
+function estimateTextW(text, px, weight) {
+  const s = String(text == null ? '' : text);
+  let em = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x80) {
+      if (c === 0x2e || c === 0x2c || c === 0x3a) em += 0.28;      // . , :
+      else if (c >= 0x30 && c <= 0x39) em += 0.58;                 // 数字
+      else em += 0.55;                                             // 其它 ASCII
+    } else if (c >= 0x4e00 && c <= 0x9fff) em += 1.0;              // 中日韩汉字
+    else em += 0.62;                                               // 货币符号 / 全角标点
+  }
+  const boldK = (weight === 'bold') ? 1.04 : 1.0;
+  return em * px * boldK * 1.06; // 1.06 = 安全余量
 }
 
 /**
@@ -74,7 +247,7 @@ function isRicebowl(cfg) {
  * @param asset {pixelW,pixelH,rice{x,y,w,h},rimY,rimBottom}
  * @param forceNoWheels 强制无轮（head 形态时传 true）
  */
-function computeLayout(cfg, n, dpiScale, gs, asset, forceNoWheels) {
+function computeLayout(cfg, n, dpiScale, gs, asset, forceNoWheels, viewNames) {
   n = Math.max(1, Math.round(n) || 1);
   dpiScale = (dpiScale > 0) ? dpiScale : 1;
   gs = (gs > 0.2) ? gs : 1.0;
@@ -89,6 +262,13 @@ function computeLayout(cfg, n, dpiScale, gs, asset, forceNoWheels) {
   };
   const capsule = (cfg && cfg.capsule) || { width: 200, height: 30, overlap: 6 };
 
+  if (isMinicard(cfg)) {
+    // 第 27 轮 · 第三种形态：小面板。viewNames 可选（第 7 参）；main.js 不传也能定卡宽，
+    // 渲染层再按实际文本做缩字号/省略，保证永不溢出。
+    const vn = Array.isArray(viewNames) ? viewNames : [];
+    return computeMinicard(cfg, n, dpiScale, gs, vn);
+  }
+
   if (!isRicebowl(cfg)) {
     // capsule 回退形态：几何保留（Mac 不渲染胶囊，主程序会记日志并退回 ricebowl）
     lay.style = 'capsule';
@@ -102,6 +282,9 @@ function computeLayout(cfg, n, dpiScale, gs, asset, forceNoWheels) {
   }
 
   const px = gs * dpiScale;
+  // 整体缩放倍率：gs 里已经乘过 K，但下面的硬下限必须同比放开，否则小档会被下限卡住
+  // （碗按 K 缩了、字被 8pt 下限顶住 → 「碗小字不小」的挤压丑态）。
+  const K = sizeScaleOf(cfg);
   const compactAfter = (disp.compactAfter != null) ? disp.compactAfter : 5;
   lay.compact = n > Math.max(2, compactAfter);
   const wantTwoRows = disp.nineLayout === 'twoRows';
@@ -110,14 +293,14 @@ function computeLayout(cfg, n, dpiScale, gs, asset, forceNoWheels) {
   lay.twoRows = lay.compact && wantTwoRows && n >= 6 && !lay.pyramid;
 
   let baseW = ri(DESIGN_PET_W * BOWL_RATIO * px);
-  baseW = clamp(baseW, 46, 190);
+  baseW = clamp(baseW, 46 * K, 190 * K);
   if (lay.compact) {
     baseW = ri(baseW * ((lay.twoRows || lay.pyramid) ? COMPACT_RATIO : ROW_RATIO));
-    if (baseW < 40) baseW = 40;
+    if (baseW < 40 * K) baseW = 40 * K;
   }
   lay.bowlW = baseW;
-  lay.bowlH = max(8, ri(baseW * a.pixelH / a.pixelW));
-  lay.gap = max(4, ri(6.0 * px));
+  lay.bowlH = max(8 * K, ri(baseW * a.pixelH / a.pixelW));
+  lay.gap = max(4 * K, ri(6.0 * px));
 
   const headWear = disp.wear === 'head';
   lay.wheelH = (disp.wheels && !forceNoWheels && !headWear) ? max(3, ri(6.0 * px)) : 0;
@@ -221,10 +404,12 @@ function computeLayout(cfg, n, dpiScale, gs, asset, forceNoWheels) {
 function computePlaque(cfg, lay) {
   const disp = (cfg && cfg.display) || {};
   const px = lay.graphicsScale * lay.dpiScale;
+  // 整体缩放倍率（与 computeLayout 同一口径）；下面所有硬下限同比放开
+  const K = sizeScaleOf(cfg);
   let plaqueScale = px;
-  if (plaqueScale < 0.5) plaqueScale = 0.5;
+  if (plaqueScale < 0.5 * K) plaqueScale = 0.5 * K;
   lay.plaqueScale = plaqueScale;
-  const textScale = max(0.85, lay.graphicsScale) * lay.dpiScale;
+  const textScale = max(0.85 * K, lay.graphicsScale) * lay.dpiScale;
   lay.textScale = textScale;
 
   let refSlot = null;
@@ -240,8 +425,8 @@ function computePlaque(cfg, lay) {
   const wrapLogo = !!(disp.logo && String(disp.logoStyle || '').toLowerCase() === 'wrap');
   const nameCenter = rimBottom + (bottom - rimBottom) * (wrapLogo ? 0.50 : 0.30);
   const plaqueCenter = rimBottom + (bottom - rimBottom) * (wrapLogo ? 0.80 : 0.64);
-  const namePx = max(8, 8 * plaqueScale);
-  const amountPx = max(9, 9 * plaqueScale);
+  const namePx = max(8 * K, 8 * plaqueScale);
+  const amountPx = max(9 * K, 9 * plaqueScale);
   const nameH = namePx * 1.10;
   let nameY = nameCenter - nameH / 2;
   let plaqueTop = plaqueCenter - th / 2;
@@ -380,6 +565,10 @@ module.exports = {
   computeLayout, computePlaque, graphicsScale, pyramidCounts, isHead, isRicebowl,
   contactPx, feetLift, feetPanelBottom, headPanelY, detailSize, rowCountsText,
   DESIGN_PET_W, BOWL_RATIO, COMPACT_RATIO, ROW_RATIO,
+  // 第 27 轮 · minicard
+  isMinicard, computeMinicard, estimateTextW,
+  MC_RATIO, MC_ROW_H, MC_PAD_X, MC_PAD_Y, MC_RADIUS, MC_NAME_PX, MC_AMOUNT_PX,
+  MC_DOT, MC_DOT_GAP, MC_MID_GAP, MC_MIN_W, MC_MAX_W,
 };
 
 if (require.main === module) _selftest();

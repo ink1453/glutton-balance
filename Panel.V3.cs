@@ -253,10 +253,17 @@ namespace GluttonBalance
     // ================================================================== 缩放 / 资源 / 布局
     internal static class ScaleMath
     {
+        /// <summary>
+        /// 视觉缩放倍率。与 Mac `src/layout.js` 的 `graphicsScale()` 逐条对齐：
+        /// 先按 petScale/petScaleRef 求比值 clamp 到 [graphicsMin, graphicsMax]，
+        /// **再乘整体倍率 K = sizePct/100**（0.0.7 修正：此前 Win 漏乘 K，
+        /// 导致 sizePct=70 时 Mac 饭桶缩到 70%、Win 饭桶仍是 100% —— 同一份配置 Win 大 43%，
+        /// 与 minicard 之前那个 K 漏接是同一个病根）。K 只作用于显示尺寸，不改配置值。
+        /// </summary>
         public static double GraphicsScale(Config cfg, double petScale)
         {
             double refScale = 1.05;
-            double lo = 0.55, hi = 2.0;
+            double lo = 0.95, hi = 2.0;
             if (cfg != null && cfg.Display != null)
             {
                 refScale = cfg.Display.PetScaleRef;
@@ -264,12 +271,22 @@ namespace GluttonBalance
                 hi = cfg.Display.GraphicsMax;
             }
             if (refScale < 0.2) refScale = 1.05;
-            if (lo < 0.2) lo = 0.55;
+            if (lo < 0.2) lo = 0.95;
+            if (lo < 0.95) lo = 0.95;   // 硬性可读下限（与 Mac `layout.js` 同）
             if (hi < lo) hi = 2.0;
             double gs = petScale / refScale;
             if (gs < lo) gs = lo;
             if (gs > hi) gs = hi;
-            return gs;
+            return gs * SizePctK(cfg);
+        }
+
+        /// <summary>整体倍率 K = sizePct/100（非法/≤0 → 1.00，保证零变化）。与 Mac `sizeScaleOf()` 同口径。</summary>
+        internal static double SizePctK(Config cfg)
+        {
+            if (cfg == null || cfg.Display == null) return 1.0;
+            int pct = cfg.Display.SizePct;
+            if (pct <= 0) return 1.0;
+            return pct / 100.0;
         }
     }
 
@@ -897,20 +914,29 @@ namespace GluttonBalance
             lay.Pyramid = lay.Compact && wantPyramid && n >= 6;
             lay.TwoRows = lay.Compact && wantTwoRows && n >= 6 && !lay.Pyramid;
             // 严格等比：盆宽 = 角色像素宽 × 0.80（设计基准 100%：77px → 62px；两档比例一致，测试 ±10%）
+            // 0.0.7 修正：硬下限必须同比乘 K，否则 sizePct<100 时「碗按 K 缩了、下限顶住不缩」
+            // → 小档挤压丑态（Mac `layout.js` 早就写成 clamp(baseW, 46*K, 190*K)，Win 这边漏了）。
+            double K = ScaleMath.SizePctK(cfg);
             int baseW = (int)Math.Round(77.0 * 0.80 * px);
-            if (baseW < 46) baseW = 46;
-            if (baseW > 190) baseW = 190;
+            int baseWLo = (int)Math.Round(46 * K);
+            int baseWHi = (int)Math.Round(190 * K);
+            if (baseWLo < 1) baseWLo = 1;
+            if (baseWHi < baseWLo) baseWHi = baseWLo;
+            if (baseW < baseWLo) baseW = baseWLo;
+            if (baseW > baseWHi) baseW = baseWHi;
             if (lay.Compact)
             {
                 // 两排/金字塔每排最多 5/4 只 → 桶宽 0.92（比一排 0.80 大 15%，信息可读）；一排仍 0.80
                 baseW = (int)Math.Round(baseW * ((lay.TwoRows || lay.Pyramid) ? 0.92 : 0.80));
-                if (baseW < 40) baseW = 40;
+                int compactLo = (int)Math.Round(40 * K);
+                if (compactLo < 1) compactLo = 1;
+                if (baseW < compactLo) baseW = compactLo;
             }
             lay.BowlW = baseW;
             lay.BowlH = lay.Asset != null && lay.Asset.PixelW > 0
-                ? Math.Max(8, (int)Math.Round(baseW * lay.Asset.PixelH / (double)lay.Asset.PixelW))
-                : Math.Max(8, (int)Math.Round(baseW * 0.65));
-            lay.Gap = Math.Max(4, (int)Math.Round(6.0 * px));
+                ? Math.Max((int)Math.Round(8 * K), (int)Math.Round(baseW * lay.Asset.PixelH / (double)lay.Asset.PixelW))
+                : Math.Max((int)Math.Round(8 * K), (int)Math.Round(baseW * 0.65));
+            lay.Gap = Math.Max((int)Math.Round(4 * K), (int)Math.Round(6.0 * px));
             // v4：head（头顶）形态强制无轮子（与轮子彩蛋互斥；display.wheels 值保留，切回 feet 恢复）
             bool headWear = cfg != null && cfg.Display != null && string.Equals(cfg.Display.Wear, "head", StringComparison.OrdinalIgnoreCase);
             lay.WheelH = (cfg != null && cfg.Display != null && cfg.Display.Wheels && !forceNoWheels && !headWear)
@@ -2333,11 +2359,10 @@ namespace GluttonBalance
             return "连接失败";
         }
 
-        /// <summary>金额格式（币种符号 + 两位小数；USD 用 $，其余一律 ¥，保持旧口径）。</summary>
+        /// <summary>金额格式（0.0.7：按显示单位——CNY ¥、USD $、CREDITS 2177.00 Credits，两位小数）。</summary>
         private static string AmountText(string currency, double amount)
         {
-            string symbol = string.Equals(currency, "USD", StringComparison.OrdinalIgnoreCase) ? "$" : "¥";
-            return symbol + amount.ToString("0.00", CultureInfo.InvariantCulture);
+            return UnitFormat.Format(currency, amount);
         }
 
         /// <summary>旧名保留（内部/外部调用点兼容）：现在直接走 BalanceText，行为包含「上次成功金额灰字」口径。</summary>
@@ -2443,6 +2468,423 @@ namespace GluttonBalance
         }
     }
 
+    // ================================================================== 小面板 minicard（第 27 轮）
+    // Mac src/layout.js computeMinicard / renderer drawMinicard 的 C# 移植。
+    // 老板 2026-11-13：「增加一种显示方式，用一个小面板显示，信息集成高，适合小屏幕使用」。
+    // 形态：一张圆角毛玻璃卡片，一行一家（左家名右金额）+ 状态点。
+    //
+    // 缩放口径：Mac 侧 K = sizePct/100 乘进全部几何量；Win 端 0.0.7 起已接上 sizePct
+    // （SizeScaleOf() 读 cfg.Display.SizePct，clamp 40..200，缺省 100），两端视觉一致。
+    internal sealed class McLayout
+    {
+        // ---- 设计常量（与 Mac src/layout.js:18-29 逐字对齐，改一处必须同步）----
+        public const double MC_RATIO = 2.8;       // 卡宽 = 桌宠实测宽 × 2.8
+        public const double MC_ROW_H = 30.0;      // 行高 30
+        public const double MC_PAD_X = 16.0;      // 左右内边距
+        public const double MC_PAD_Y = 10.0;      // 上下内边距
+        public const double MC_RADIUS = 14.0;     // 圆角
+        public const double MC_NAME_PX = 13.0;    // 家名字号
+        public const double MC_AMOUNT_PX = 13.0;  // 金额字号
+        public const double MC_DOT = 8.0;         // 状态点直径
+        public const double MC_DOT_GAP = 7.0;     // 点与文字间距
+        public const double MC_MID_GAP = 8.0;     // 家名区与金额区最小空隙
+        public const double MC_MIN_W = 168.0;     // 卡宽下限
+        public const double MC_MAX_W = 460.0;     // 卡宽上限
+        public const double DESIGN_PET_W = 77.0;  // 100% 时角色像素宽（Win 实测，与 Mac 同源）
+
+        public int Count;
+        public float DpiScale = 1f;
+        public double GraphicsScale = 1.0;
+        public double SizeK = 1.0;                // sizePct/100；0.0.7 固定 1.0
+
+        // ---- 卡片几何（渲染层只读这些，不自己算尺寸）----
+        public double CardW, CardH;
+        public double RowH, PadX, PadY, Radius;
+        public double DotD, DotGap, MidGap;
+        public double NamePx, AmountPx;
+        public double NameMaxW, AmountMaxW;
+        public List<McRow> Rows = new List<McRow>(12);
+
+        public sealed class McRow
+        {
+            public int Index;
+            public string Name = "";
+            public double Top, Cy;          // 行顶 / 行中心 y
+            public double DotCx;            // 状态点圆心 x
+            public double TextX;            // 家名左边界
+            public double AmountRight;      // 金额右边界
+        }
+
+        /// <summary>整体缩放倍率 = sizePct/100。非法/缺失/≤0 兜底 1.0（与 Mac sizeScaleOf 同口径）。</summary>
+        public static double SizeScaleOf(Config cfg)
+        {
+            if (cfg == null || cfg.Display == null) return 1.0;
+            int pct = cfg.Display.SizePct;
+            if (pct <= 0) return 1.0;
+            return pct / 100.0;
+        }
+
+        /// <summary>
+        /// 文本宽度估算（不依赖 GDI，纯布局用）。与 Mac layout.js estimateTextW 同口径：
+        /// ASCII 数字 0.58em / 其它 ASCII 0.55em / 小数点逗号冒号 0.28em / 汉字 1.0em / 其它 0.62em，
+        /// 末乘 1.06 安全余量（宁宽不溢）。最终绘制仍由 GDI MeasureString 决定。
+        /// </summary>
+        public static double EstimateTextW(string text, double px, bool bold)
+        {
+            string s = text == null ? "" : text;
+            double em = 0;
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (c < 0x80)
+                {
+                    if (c == '.' || c == ',' || c == ':') em += 0.28;
+                    else if (c >= '0' && c <= '9') em += 0.58;
+                    else em += 0.55;
+                }
+                else if (c >= 0x4e00 && c <= 0x9fff) em += 1.0;
+                else em += 0.62;
+            }
+            double boldK = bold ? 1.04 : 1.0;
+            return em * px * boldK * 1.06;
+        }
+
+        /// <summary>金额列最宽需要多少：按最长金额形态「C + 7 位整数」估算（0.0.7 起金额不带小数）。</summary>
+        public static double AmountWidth(double px, double k)
+        {
+            if (k <= 0) k = 1;
+            return EstimateTextW("C 1234567", MC_AMOUNT_PX * px * k, true) + 1;
+        }
+
+        /// <summary>内容需求宽度：内边距 + 状态点 + 家名 + 空隙 + 金额列。</summary>
+        public static double ContentWidth(string[] names, double px, double k)
+        {
+            if (k <= 0) k = 1;
+            double nameW = 0;
+            if (names != null)
+            {
+                for (int i = 0; i < names.Length; i++)
+                {
+                    double w = EstimateTextW(names[i], MC_NAME_PX * px * k, false);
+                    if (w > nameW) nameW = w;
+                }
+            }
+            if (nameW > 120 * px * k) nameW = 120 * px * k;   // 家名最长按 120 算，超出走中间省略
+            double g = (px > 0.85 ? px : 0.85) * k;
+            return MC_PAD_X * g * 2 + MC_DOT * g + MC_DOT_GAP * g + nameW + MC_MID_GAP * g + AmountWidth(px, k);
+        }
+
+        public static McLayout Compute(Config cfg, int n, float dpiScale, double graphicsScale, string[] names)
+        {
+            return Compute(cfg, n, dpiScale, graphicsScale, names, SizeScaleOf(cfg));
+        }
+
+        public static McLayout Compute(Config cfg, int n, float dpiScale, double graphicsScale, string[] names, double sizeK)
+        {
+            if (n < 1) n = 1;
+            if (!(dpiScale > 0)) dpiScale = 1f;
+            double gs = (graphicsScale > 0.2) ? graphicsScale : 1.0;
+            double k = (sizeK > 0) ? sizeK : 1.0;
+            double px = gs * dpiScale;
+
+            McLayout lay = new McLayout();
+            lay.Count = n;
+            lay.DpiScale = dpiScale;
+            lay.GraphicsScale = gs;
+            lay.SizeK = k;
+
+            // ---- 卡宽：先跟桌宠，再按内容需求抬高；K 乘进基础宽与上下限 ----
+            double needW = ContentWidth(names, px, k);
+            double cardW = MC_RATIO * DESIGN_PET_W * px * k;
+            double loW = Math.Max(Math.Round(MC_MIN_W * k), needW);
+            double hiW = Math.Max(Math.Round(MC_MAX_W * k), needW);
+            if (cardW < loW) cardW = loW;
+            if (cardW > hiW) cardW = hiW;
+            if (cardW < needW) cardW = needW;
+            lay.CardW = cardW;
+
+            // ---- 纵向与文字几何：全部随 K 等比（第 27 轮 Mac 侧修过的 bug，Win 直接吸收结论）----
+            double g = (gs > 0.85 ? gs : 0.85) * dpiScale * k;
+            lay.RowH = Math.Round(MC_ROW_H * px * k);
+            lay.PadX = Math.Round(MC_PAD_X * g);
+            lay.PadY = Math.Round(MC_PAD_Y * g);
+            lay.Radius = Math.Round(MC_RADIUS * g);
+            lay.DotD = Math.Max(4.0, Math.Round(MC_DOT * g));
+            lay.DotGap = Math.Round(MC_DOT_GAP * g);
+            lay.MidGap = Math.Round(MC_MID_GAP * g);
+            lay.NamePx = Math.Max(8 * k, MC_NAME_PX * px * k);
+            lay.AmountPx = Math.Max(8 * k, MC_AMOUNT_PX * px * k);
+            lay.CardH = lay.PadY * 2 + lay.RowH * n;
+
+            lay.AmountMaxW = AmountWidth(px, k);
+            double nameMax = cardW - lay.PadX * 2 - lay.DotD - lay.DotGap - lay.MidGap - lay.AmountMaxW;
+            lay.NameMaxW = nameMax > 12 ? nameMax : 12;
+
+            for (int i = 0; i < n; i++)
+            {
+                McRow row = new McRow();
+                row.Index = i;
+                row.Name = (names != null && i < names.Length && names[i] != null) ? names[i] : "";
+                row.Top = lay.PadY + lay.RowH * i;
+                row.Cy = row.Top + lay.RowH / 2.0;
+                row.DotCx = lay.PadX + lay.DotD / 2.0;
+                row.TextX = lay.PadX + lay.DotD + lay.DotGap;
+                row.AmountRight = cardW - lay.PadX;
+                lay.Rows.Add(row);
+            }
+            return lay;
+        }
+    }
+
+    // ================================================================== 小面板渲染（第 27 轮）
+    // Mac renderer.js drawMinicard 的 C# 移植：一张圆角毛玻璃卡片 + n 行（状态点 家名 ... 金额）。
+    // 几何全部读 McLayout，这里只负责画，不自己算尺寸 —— 保证布局数字与实际绘制一致。
+    internal static class McRenderer
+    {
+        public static Bitmap Render(ProviderView[] views, McLayout lay, VisualStyle style, float dpiScale)
+        {
+            int w = (int)Math.Round(lay.CardW);
+            int h = (int)Math.Round(lay.CardH);
+            if (w < 1) w = 1;
+            if (h < 1) h = 1;
+            // 与 BowlRenderer 一致：2× 超采样绘制后降采样，小字号边缘更细腻
+            int ss = RasterScale.Supersample;
+            Bitmap hi = new Bitmap(w * ss, h * ss, PixelFormat.Format32bppPArgb);
+            try
+            {
+                using (Graphics g = Graphics.FromImage(hi))
+                {
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.Clear(Color.Transparent);
+                    RasterScale.BeginScaled(g);
+                    DrawCard(g, views, lay, style);
+                }
+                return RasterScale.Downscale(hi, w, h);
+            }
+            finally
+            {
+                hi.Dispose();
+            }
+        }
+
+        /// <summary>一行 → 状态点色与金额色。优先级：饭(米色) &gt; 失败/无结果(灰) &gt; 低余额(橙) &gt; 成功(常规)。</summary>
+        // ---- minicard 专用状态色（0.0.7）----
+        // 为什么不用 VisualStyle.DotGreen 等：饭桶用的是「主题语义色」（ok / danger / warn 走调色板），
+        // 而 macOS 的 minicard 用的是 iOS 系统色，两套不是一回事——直接复用会让 Win 画成青绿 + 砖红 + 土黄，
+        // 与 Mac 肉眼可见不一致（Mac 是 iOS 绿 48,209,88 / 橙 255,159,10 / 红 255,69,58）。
+        // 所以在这里按 style.Light 纯函数取色：不依赖 VisualStyle 的构造路径（Build / FromPalette / Fallback
+        // 三条都可能走），避免漏填字段拿到 Color.Empty 画成透明。
+        private static void RowColors(ProviderView v, VisualStyle style, out Color dot, out Color amount)
+        {
+            bool light = style != null && style.Light;
+            // 状态点 + 金额，逐条对齐 macOS renderer.js 的 minicardRowColors()：
+            //   view.rice      -> dotOk  / amountRice（金棕）
+            //   !hasResult||!ok-> dotFail/ amountFail（灰，不是「连接失败」以外的颜色）
+            //   view.low       -> dotWarn/ amountLow （橙，与状态点同色系；注意**不是**饭桶的 danger 粉红）
+            //   其余           -> dotOk  / amount
+            Color dotOk = light ? Color.FromArgb(255, 40, 205, 65) : Color.FromArgb(255, 48, 209, 88);
+            Color dotWarn = light ? Color.FromArgb(255, 255, 149, 0) : Color.FromArgb(255, 255, 159, 10);
+            Color dotFail = light ? Color.FromArgb(255, 255, 59, 48) : Color.FromArgb(255, 255, 69, 58);
+            Color dotIdle = light ? Color.FromArgb(255, 142, 142, 147) : Color.FromArgb(255, 152, 152, 157);
+            Color amountOk = light ? Color.FromArgb(240, 0, 0, 0) : Color.FromArgb(250, 255, 255, 255);
+            // 浅色主题：低额金额必须能读清。亮橙 255,149,0 叠白底只有 2.2:1（远低于 WCAG AA 4.5:1），
+            // 故浅色下金额改用深橙 166,88,0（5.01:1），与状态点同色系但更深；深色主题橙底本就够亮（9.4:1）保持原样。
+            Color amountLow = light ? Color.FromArgb(255, 166, 88, 0) : dotWarn;
+            Color amountFail = light ? Color.FromArgb(107, 0, 0, 0) : Color.FromArgb(115, 255, 255, 255);
+            Color amountRice = light ? Color.FromArgb(242, 146, 100, 20) : Color.FromArgb(245, 255, 214, 140);
+
+            if (v == null) { dot = dotIdle; amount = amountFail; return; }
+            if (v.Rice) { dot = dotOk; amount = amountRice; return; }
+            bool okState = v.HasResult && v.Ok;
+            if (!okState) { dot = dotFail; amount = amountFail; return; }
+            if (v.Low) { dot = dotWarn; amount = amountLow; return; }
+            dot = dotOk; amount = amountOk;
+        }
+
+        private static void DrawCard(Graphics g, ProviderView[] views, McLayout lay, VisualStyle style)
+        {
+            float W = (float)lay.CardW;
+            float H = (float)lay.CardH;
+            float rad = (float)Math.Max(2.0, lay.Radius);
+            float scale = (float)(lay.GraphicsScale * lay.DpiScale);
+
+            // ---- 卡面：半透明底 + 1px 细描边（Win 无原生 vibrancy，自绘玻璃感）----
+            using (GraphicsPath path = RoundRect(1f, 1f, W - 2f, H - 2f, rad))
+            using (SolidBrush fill = new SolidBrush(style.CardFill))
+            {
+                g.FillPath(fill, path);
+            }
+            // 顶部高光：一条从顶部渐隐的亮色，制造玻璃受光面
+            using (GraphicsPath path = RoundRect(1f, 1f, W - 2f, H - 2f, rad))
+            {
+                Region old = g.Clip;
+                g.SetClip(path, CombineMode.Intersect);
+                float glossH = (float)Math.Max(2.0, H * 0.55);
+                if (glossH > 0.5f)
+                {
+                    using (LinearGradientBrush gloss = new LinearGradientBrush(
+                        new RectangleF(0f, 0f, W, glossH), style.CardTop, Color.Transparent, LinearGradientMode.Vertical))
+                    {
+                        g.FillRectangle(gloss, 0f, 0f, W, glossH);
+                    }
+                }
+                g.Clip = old;
+            }
+            // 细描边（半像素对齐，1px 视觉宽度）
+            using (GraphicsPath path = RoundRect(0.5f, 0.5f, W - 1f, H - 1f, rad))
+            using (Pen pen = new Pen(style.CardBorder, Math.Max(1f, scale)))
+            {
+                g.DrawPath(pen, path);
+            }
+
+            // ---- 行 ----
+            for (int i = 0; i < lay.Rows.Count; i++)
+            {
+                McLayout.McRow row = lay.Rows[i];
+                ProviderView v = (row.Index >= 0 && row.Index < views.Length) ? views[row.Index] : null;
+                Color dotColor, amountColor;
+                RowColors(v, style, out dotColor, out amountColor);
+                float cy = (float)row.Cy;
+                float rowHf = (float)lay.RowH;
+                float rowTopF = cy - rowHf / 2f;
+
+                // 状态点：实心圆（小面板要干净，不加饭桶那套灯座）
+                float dotD = (float)Math.Max(2.0, lay.DotD);
+                using (SolidBrush db = new SolidBrush(dotColor))
+                {
+                    g.FillEllipse(db, (float)row.DotCx - dotD / 2f, cy - dotD / 2f, dotD, dotD);
+                }
+
+                // 家名（左对齐；放不下先缩字号，再中间省略）
+                string name = (v != null && v.Name != null) ? v.Name : (row.Name ?? "");
+                float namePx = (float)lay.NamePx;
+                float textX = (float)row.TextX;
+                float nameMaxW = (float)lay.NameMaxW;
+                string nameShown = FitText(g, name, ref namePx, nameMaxW, false);
+                using (Font f = new Font(V3Fonts.Family(), namePx, FontStyle.Regular, GraphicsUnit.Pixel))
+                using (SolidBrush nb = new SolidBrush(style.NameColor))
+                using (StringFormat sf = new StringFormat(StringFormat.GenericTypographic))
+                {
+                    sf.Alignment = StringAlignment.Near;
+                    sf.LineAlignment = StringAlignment.Center;
+                    sf.FormatFlags |= StringFormatFlags.NoWrap;
+                    g.DrawString(nameShown, f, nb, new RectangleF(textX, rowTopF, nameMaxW, rowHf), sf);
+                }
+
+                // 金额（右对齐；CREDITS 走 'C ' 前缀，与饭桶同口径）
+                string amount = AmountText(v);
+                float amountPx = (float)lay.AmountPx;
+                float amountRight = (float)row.AmountRight;
+                float amountMaxW = (float)lay.AmountMaxW;
+                string amountShown = FitText(g, amount, ref amountPx, amountMaxW, true);
+                using (Font f = new Font(V3Fonts.Family(), amountPx, FontStyle.Bold, GraphicsUnit.Pixel))
+                using (SolidBrush ab = new SolidBrush(amountColor))
+                using (StringFormat sf = new StringFormat(StringFormat.GenericTypographic))
+                {
+                    sf.Alignment = StringAlignment.Far;
+                    sf.LineAlignment = StringAlignment.Center;
+                    sf.FormatFlags |= StringFormatFlags.NoWrap;
+                    g.DrawString(amountShown, f, ab, new RectangleF(amountRight - amountMaxW, rowTopF, amountMaxW, rowHf), sf);
+                }
+
+                // 行分隔线（最后一行不画，与 macOS 列表口径一致）
+                if (i + 1 < lay.Rows.Count)
+                {
+                    float divY = (float)Math.Round(row.Top + lay.RowH) - 0.5f;
+                    using (Pen pen = new Pen(style.CardDivider, Math.Max(0.5f, 0.6f * scale)))
+                    {
+                        g.DrawLine(pen, (float)lay.PadX, divY, W - (float)lay.PadX, divY);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 文本适配：先按原字号量；超宽则逐步缩字号（下限 0.85×）；仍超则按尾部/中间省略。
+        /// 与 Mac fitName/fitShrink 同口径。返回实际要画的字符串，px 回传实际字号。
+        /// </summary>
+        private static string FitText(Graphics g, string text, ref float px, float maxW, bool bold)
+        {
+            if (string.IsNullOrEmpty(text) || maxW <= 1f) return text ?? "";
+            FontStyle fs = bold ? FontStyle.Bold : FontStyle.Regular;
+            float floorPx = Math.Max(7f, px * 0.85f);
+            float cur = px;
+            string shown = text;
+            while (cur >= floorPx)
+            {
+                using (Font f = new Font(V3Fonts.Family(), cur, fs, GraphicsUnit.Pixel))
+                {
+                    SizeF sz = g.MeasureString(shown, f, int.MaxValue, StringFormat.GenericTypographic);
+                    if (sz.Width <= maxW)
+                    {
+                        px = cur;
+                        return shown;
+                    }
+                }
+                cur -= Math.Max(0.5f, px * 0.06f);
+            }
+            px = floorPx;
+            // 缩到下限还放不下 → 省略号兜底，永不溢出卡面
+            shown = Ellipsize(g, text, floorPx, fs, maxW, bold);
+            return shown;
+        }
+
+        private static string Ellipsize(Graphics g, string text, float px, FontStyle fs, float maxW, bool bold)
+        {
+            const string dots = "\u2026";
+            using (Font f = new Font(V3Fonts.Family(), px, fs, GraphicsUnit.Pixel))
+            {
+                for (int keep = text.Length - 1; keep > 0; keep--)
+                {
+                    string cand = text.Substring(0, keep) + dots;
+                    SizeF sz = g.MeasureString(cand, f, int.MaxValue, StringFormat.GenericTypographic);
+                    if (sz.Width <= maxW) return cand;
+                }
+            }
+            return dots;
+        }
+
+        /// <summary>
+        /// 金额文本（小面板专用）。复用 BowlRenderer.BalanceText 的全部口径：
+        /// 米饭→「满满一盆」、失败但 10 分钟内有上次成功→灰字旧值、otherwise→「连接失败」。
+        /// 唯一差异：CREDITS 显示成「C 2177」（Mac 侧同口径；老板 0.0.7 令：不用 ₡、不带小数）。
+        /// </summary>
+        private static string AmountText(ProviderView v)
+        {
+            if (v == null) return "--";
+            // Unit 是 0.0.7 新增的显示单位；老数据/演示数据可能只填 Currency，逐级兜底。
+            string unit = (v.Unit ?? "").Trim().ToUpperInvariant();
+            if (unit.Length == 0) unit = (v.Currency ?? "").Trim().ToUpperInvariant();
+            if (unit == UnitFormat.Credits)
+            {
+                bool live = v.HasResult && v.Ok;
+                double amount = live ? v.Amount : v.LastGoodAmount;
+                bool show = live || v.ShowLastGood;
+                if (!show) return "连接失败";
+                return "C " + UnitFormat.Money(amount).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+            return BowlRenderer.BalanceText(v);
+        }
+
+        private static GraphicsPath RoundRect(float x, float y, float w, float h, float r)
+        {
+            if (r < 0.1f) r = 0.1f;
+            float d = r * 2f;
+            if (d > w) d = w;
+            if (d > h) d = h;
+            GraphicsPath p = new GraphicsPath();
+            p.AddArc(x, y, d, d, 180f, 90f);
+            p.AddArc(x + w - d, y, d, d, 270f, 90f);
+            p.AddArc(x + w - d, y + h - d, d, d, 0f, 90f);
+            p.AddArc(x, y + h - d, d, d, 90f, 90f);
+            p.CloseFigure();
+            return p;
+        }
+    }
+
     // ================================================================== 展开明细
     internal static class DetailRenderer
     {
@@ -2522,7 +2964,7 @@ namespace GluttonBalance
                         if (v.Rice) sub = "大白饭档 · 不联网 · 永远满满一盆";
                         else
                         {
-                            string thr = double.IsNaN(v.Threshold) ? "无" : ("¥" + v.Threshold.ToString("0.##", CultureInfo.InvariantCulture));
+                            string thr = double.IsNaN(v.Threshold) ? "无" : UnitFormat.ThresholdText(v.Unit, v.Threshold);
                             string last;
                             if (v.LastOkMs >= 0) last = "成功";
                             else if (v.LastAttemptMs >= 0) last = "失败";
@@ -2633,6 +3075,27 @@ namespace GluttonBalance
                 ds.LastOkMs = 0;
                 list.Add(ds);
             }
+            else if (st == "credits")
+            {
+                // 0.0.7 出图验收：CREDITS 应显示成「C 2177」，不写 Credits、不带 ₡、不带小数
+                list.Add(Make("deepseek", "DeepSeek", 1528, "CREDITS", 2000, 100, 60));
+            }
+            else if (st == "fail")
+            {
+                // 0.0.7 出图验收：彻底失败（无上次成功值）→ 红点 + 灰字「连接失败」
+                ProviderView ds = new ProviderView();
+                ds.Id = "deepseek";
+                ds.Name = "DeepSeek";
+                ds.HasResult = false;
+                ds.Ok = false;
+                ds.Unit = "CNY";
+                ds.Currency = "CNY";
+                ds.FullAmount = 500;
+                ds.Threshold = 5;
+                ds.IntervalSec = 60;
+                ds.LastOkMs = -1;
+                list.Add(ds);
+            }
             else
             {
                 list.Add(Make("deepseek", "DeepSeek", 487.35, "", 500, 5, 60));
@@ -2666,6 +3129,8 @@ namespace GluttonBalance
             v.Ok = true;
             v.Amount = amount;
             v.Currency = string.IsNullOrEmpty(currency) ? "CNY" : currency;
+            // 0.0.7：Unit 是金额格式的权威来源，演示数据与真实环境保持一致，否则出图验收会走错分支。
+            v.Unit = UnitFormat.Normalize(v.Currency, "");
             v.FullAmount = full;
             v.Ratio = Math.Max(0, Math.Min(1, amount / full));
             v.Threshold = thr;
@@ -3533,9 +3998,14 @@ namespace GluttonBalance
                 if (!string.IsNullOrEmpty(layout))
                 {
                     string l0 = layout.Trim().ToLowerInvariant();
-                    if (l0 == "row9") l0 = "row";
-                    if (l0 == "row" || l0 == "pyramid") cfg.Display.NineLayout = l0;
-                    else if (l0 == "tworows") cfg.Display.NineLayout = "twoRows";
+                    // 0.0.7：--layout 顺带支持切形态，便于出图验收（ricebowl / minicard / capsule）
+                    if (l0 == "minicard" || l0 == "ricebowl" || l0 == "capsule") cfg.Display.Style = l0;
+                    else
+                    {
+                        if (l0 == "row9") l0 = "row";
+                        if (l0 == "row" || l0 == "pyramid") cfg.Display.NineLayout = l0;
+                        else if (l0 == "tworows") cfg.Display.NineLayout = "twoRows";
+                    }
                 }
                 if (!string.IsNullOrEmpty(theme))
                 {
@@ -3554,6 +4024,24 @@ namespace GluttonBalance
                 int n = app.DemoCount;
                 ProviderView[] views = DemoData.BuildViews(n, cfg, state);
                 Bitmap bmp;
+                // 0.0.7：--shot 也支持 minicard，便于双端像素级验收（与 Repaint 同参同源）
+                if (cfg.Display != null && string.Equals(cfg.Display.Style, "minicard", StringComparison.OrdinalIgnoreCase))
+                {
+                    string[] vn = new string[views.Length];
+                    for (int i = 0; i < views.Length; i++) vn[i] = views[i] == null ? "" : views[i].Name;
+                    McLayout mcl = McLayout.Compute(cfg, views.Length, app.DpiScale, app.GraphicsScaleVal, vn);
+                    bmp = McRenderer.Render(views, mcl, app.Style, app.DpiScale);
+                    string dirM = Path.GetDirectoryName(outPath);
+                    if (!string.IsNullOrEmpty(dirM) && !Directory.Exists(dirM)) Directory.CreateDirectory(dirM);
+                    bmp.Save(outPath, ImageFormat.Png);
+                    Log.Write("shot saved path=" + outPath + " count=" + n + " w=" + bmp.Width + " h=" + bmp.Height
+                        + " style=minicard dpi=" + FormatNum(app.DpiScale)
+                        + " cardW=" + FormatNum(mcl.CardW) + " cardH=" + FormatNum(mcl.CardH)
+                        + " rowH=" + FormatNum(mcl.RowH) + " nameMaxW=" + FormatNum(mcl.NameMaxW)
+                        + " theme=" + (app.Style == null ? "" : app.Style.Theme) + " state=" + (state ?? "normal"));
+                    bmp.Dispose();
+                    return 0;
+                }
                 BowlLayout lay = BowlLayout.Compute(cfg, n, app.DpiScale, app.GraphicsScaleVal);
                 if (lay.Style == "capsule")
                 {

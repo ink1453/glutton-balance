@@ -91,6 +91,23 @@
       "enabled": true
     },
     {
+      "id": "qoder",
+      "name": "Qoder",
+      "type": "official",
+      "preset": "qoder",
+      "endpoint": "https://openapi.qoder.com.cn",
+      "unit": "CREDITS",
+      "keySource": {
+        "kind": "file",
+        "file": "%USERPROFILE%\\.dsh\\secrets\\qoder-pat.txt",
+        "var": "QODER_PAT"
+      },
+      "threshold": 200,
+      "fullAmount": 2000,
+      "intervalSec": 60,
+      "enabled": false
+    },
+    {
       "id": "rice",
       "name": "大白饭",
       "type": "rice",

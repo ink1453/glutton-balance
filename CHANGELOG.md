@@ -1,5 +1,58 @@
 # 更新日志
 
+## 0.0.7（2026-11-13 发布）
+
+金额一律去掉小数位；新增 `minicard`（面板）显示样式；恢复 / 新增 Qoder 供应商；积分单位符号 `₡` → `C `。Windows 显示窗 / macOS 显示窗同号 0.0.7。
+
+### 通用（双端一致）
+
+- **金额去掉小数位（双端口径逐条对齐）**：显示金额一律取整，`¥82.03` → `¥82`、`C 1528.44` → `C 1528`。三端口径完全一致，避免明细卡与主显示窗对同一笔余额显示不同数字：①**四舍五入**；②**负数远离零**（`-82.5` → `-83`，不是 `-82`）；③**`-0` 归一为 0**（`Math.round(-0.5)` 在 JS 里得到 `-0`，会显示成 `-0`）。实现：macOS 在 `main.js` 新增 `moneyText()`（`amountText()` / `detailSubText()` 统一走它），`renderer/renderer.js` 的 `moneyText()` 逐字同口径；Windows 在 `Panel.cs` 新增 `UnitFormat.Money()`（`UnitFormat.Format()` 统一走它）。**判断缓存指纹也按取整后的值算**，否则小数位抖动会触发无谓重绘、而屏幕上还是同一个数字。
+- **新增 `minicard`（面板）显示样式**：除原有「饭桶」外新增**竖排小面板**形态——一行一家、左边家名、中间状态点（绿 `#30d158` / 橙 `#ff9f0a` / 红 `#ff453a`）、右边金额，macOS 圆角磨砂质感；适合小屏幕、省地方。`display.style` 新增合法值 `minicard`（大小写不敏感，未知值仍安全回退 `ricebowl`，旧值 `ricebowl` / `capsule` 行为完全不变）；`ricebowl` 有零变化双证据（951 组几何哈希全等 + 双窗口逐像素 A/B `PASS=66 FAIL=0`）。实现是**独立新增** `computeMinicard()`，由 `computeLayout()` 分派进入，主窗口逻辑不动。macOS 附 `build/switch-style.sh` 一键切换（无参数只看当前，自动备份配置 + 刷新面板）。
+- **单位符号 `₡` → `C `**：Qoder 这类积分源原来显示 `₡2177`，其中 `U+20A1`（科朗符号）在中文字体（PingFang SC）里**缺字**，会掉到系统回退字体、字重明显不匹配；改为**字母 `C` + 空格**（`C 1528`）。积分源仍不是钱，不加 `¥` / `$`。
+- **版本号**：macOS `package.json` 0.0.7、打包脚本 `APP_VERSION=0.0.7`（合法 semver）；Windows `0.0.7`（与 Mac 同号）。兼容：新增字段（`display.style` 的 `minicard`、供应商 `unit`）全部可选，旧 `config.json` 原样可用。
+
+### macOS 显示窗（v0.0.7）
+
+- **金额取整 + `C ` 单位**：`main.js` 新增 `moneyText()`，`amountText()` 改为 `¥82` / `$82` / `C 1528` 三口径；`detailSubText()` 的低额提醒阈值同口径（`低于 ¥5 变红` / `低于 5 Credits 变红`）；`renderer/renderer.js` 的 `CREDITS_SYMBOL` 由 `₡` 改为 `C `，木牌上不再写 "Credits" 字样。
+- **minicard 缩放修正（`sizePct` 等比）**：整体缩放 `sizePct` 早先只作用在卡片**宽度**的 clamp 边界上，行高 / 内边距 / 圆角 / 状态点 / 字号全部没跟着缩，导致 `sizePct<100` 时「卡缩小、内容不缩」，家名列被挤到下限、`DeepSeek` 显示成 `Dek…`。现将行高 `rowH`、上下左右内边距 `padX`/`padY`、圆角 `radius`、状态点 `dotD`/`dotGap`、中缝 `midGap`、字号 `namePx`/`amountPx`、金额列宽 `amountMaxW` 全部乘 `K = sizePct/100`，卡宽基础值同样乘 `K` 并以内容需求宽度 `needW` 作为上下限的地板，`namePx`/`amountPx` 保留 `max(8*K, …)` 下限。验证：`sizePct` 50/70/85/100/130/200 六档 × 1~9 家 × DPI 1/2 共 60 组几何回归全绿；离屏渲染深/浅双主题 × 70%/100% 出图核对，真机截图确认 `DeepSeek` / `「中转站」` / `Qoder` 三行完整无省略号。
+- **minicard 小面板**：见上「通用」。`src/layout.js` 新增 `isMinicard()` / `computeMinicard()`（小面板几何全由布局层算好，渲染层只读尺寸，不再自己算），`src/style.js` 新增 minicard 配色 token（**挂在独立子对象上，既有 30 个配色键一个都不动**），`renderer/renderer.js` 新增小面板绘制路径（`style !== 'minicard'` 时完全走原路径）。
+- **Qoder 供应商**：`src/providers.js`（薄壳 → `shared/providers-core.js`）支持 Qoder 积分查询（PAT 换 jt- 票据 + 进程内缓存 + 401 强制重换一次）；配置预设新增 `qoder`（默认关闭、`unit: CREDITS`）；密钥只读 `~/.dsh/secrets/qoder-pat.txt`（`QODER_PAT`），日志与界面均不带密钥。
+
+### Windows 显示窗（v0.0.7）
+
+> **修复「面板 / 饭桶」切换后尺寸不对、饭桶完全不吃 sizePct（整体缩放）**
+> 现象：Mac 上「整体缩放 70%」饭桶和面板都乖乖缩小，Win 上切到「饭桶」立刻弹回原尺寸 —— 同一份 `config.json`，Win 比 Mac 大一圈。
+> 根因两处，都是**硬下限没跟着 K 缩放**（K = `display.sizePct / 100`）：
+> ① `ScaleMath.GraphicsScale()` 完全没乘 K —— Mac 的 `graphicsScale()` 末尾有 `* k`，Win 漏了。于是 Win 只有 minicard 在 `McLayout` 内部单独乘了 K，**饭桶（ricebowl）这条路径 K 一次都没用上**，`sizePct` 设 40 或 200 都纹丝不动。
+> ② `BowlLayout.Compute()` 里 `baseW < 46`、`baseW > 190`、`if (baseW < 40)`、`Math.Max(8, …)`、`Math.Max(4, …)` 全是**裸常数下限**；Mac 早就写成 `clamp(baseW, 46 * K, 190 * K)`、`max(8 * K, …)`、`max(4 * K, …)`。下限不乘 K 就会出现「碗按 K 缩了、下限却顶住」的挤压丑态。
+> 修复：`GraphicsScale()` 末尾 `return gs * SizePctK(cfg)`（新增 `internal static double SizePctK(Config)`，非法/≤0 → 1.0 保证零变化）；`BowlLayout.Compute()` 的碗宽上下限、compact 下限、碗高下限、间隙下限全部改成 `常数 * K`。K 只作用于显示尺寸，不回写配置。
+> 验证：`--shot` 用**与 Mac 完全相同的参数**（`petScale=1.5`、`dpiScale=1`、`count=2`、`display.wear=head`、`nineLayout=pyramid`）跑 2 形态 × 4 档共 8 组，与 Mac `layout.js` 逐格比对 **7/8 逐像素一致**（`ricebowl` 40/70/100/200 = 73×37 / 130×64 / 185×92 / 369×185，`minicard` 40/70/100 = 67×20 / 151×56 / 308×114 全等；`minicard` 200 为 1084 vs 1085，仅取整差 1px）。`ricebowl` 四档从「全部 185×92 恒定」变为线性 96→130→185→369。
+> 真机：Win `panel.exe` 184,320 B / ver 0.0.7.0，pid 43600 Session 1，`refreshSeq=30`，三家余额正常（`deepseek 78.92` / `qoder 826.00 CREDITS` / `a6 33.78`）。
+
+> **修复 Qoder 在 Windows 上「NETWORK (qoder.exchange)」连不上（TLS 版本）**
+> 现象：Mac 端 Qoder 正常显示 `C 959`，Win 端日志一直 `balance id=qoder failed error=NETWORK (qoder.exchange)`，而 DeepSeek / A6 同时都正常。
+> 根因：Win 端用 **.NET Framework 4.0 的 csc** 编译，其默认 `ServicePointManager.SecurityProtocol` 只有 **Ssl3 + Tls(1.0)**；`openapi.qoder.com.cn` 只接受 **TLS 1.2 以上**，握手直接失败 → `WebExceptionStatus.SecureChannelFailure` → 分类码落到 `NETWORK`。DeepSeek / A6 的服务器仍兼容 TLS 1.0，所以一直是好的，把问题掩盖了。
+> **排障陷阱**：在 PowerShell 里手动 `Invoke-WebRequest` / `HttpWebRequest` 测同一个接口**全部返回 HTTP 200** —— 因为 PowerShell 跑在系统自带的新版 .NET 上，默认就开 TLS 1.2。必须用**与目标程序同一个 csc 编译**的 C# 探针复刻 `HttpRequest` 才能复现（探针打印 `SecurityProtocol=Ssl3, Tls` 即坐实）。
+> 修复：`Panel.cs` 新增 `Program.EnableModernTls()`，在 `Main` 第一行调用，显式设置 `SecurityProtocol = 3072 | 768 | Tls`（Tls12 + Tls11 + Tls，用数值兜底避免老编译器没有 `Tls12` 枚举成员），不支持时静默回落 TLS 1.0，不影响 DeepSeek / A6。
+> 验证：同一份 csc、同一 Session，加这一行前后对比 —— `SecureChannelFailure` → `HTTP 200 hasToken=True`；真机日志 `balance id=qoder ok amount=899.00 currency=CREDITS latencyMs=282`，三家全部正常（`deepseek 79.06` / `qoder 899.00 CREDITS` / `a6 33.78`），窗口 `w=216 h=110` 三行完整。
+
+> **真机验证（2026-11-13，墨墨的 Win 机器）**：`panel.exe` 版本资源 `0.0.7.0`，编译零错误；真实 API 余额查询正常（`deepseek 79.28` / `a6 33.78`）；`minicard` 与 `ricebowl` 反复切换 4 次全部稳定，几何精确（`ricebowl` 185×92、`minicard` 308×114，2 家）；离屏出图核对 8 种状态（深/浅主题 × normal/credits/fail/stale/low/rice），CREDITS 显示 `C 1528`、失败显示「连接失败」+ 红点、断网韧性显示上次成功值灰字、低额显示橙点；浅色主题金额对比度 **20.82:1**、深色 **17.36:1**（WCAG AA 要求 4.5:1）。
+
+> **真机验证补记（配色双端对齐）**：出图核对时发现 Win 的 `McRenderer` 直接复用了饭桶的**主题语义色**（`DotGreen` / `DotRed` / `LowColor` 等），画出来是青绿 + 砖红 + 土黄，而 macOS 的 minicard 用的是 **iOS 系统色**（绿 `rgb(48,209,88)` / 橙 `rgb(255,159,10)` / 红 `rgb(255,69,58)`）——两套不是一回事，肉眼可见不一致。已在 `McRenderer.RowColors()` 内按 `style.Light` 纯函数取色（不再依赖 `VisualStyle` 的 `Build()` / `FromPalette()` / `Fallback()` 三条构造路径，避免漏填字段拿到 `Color.Empty` 画成透明），逐条对齐 macOS `minicardRowColors()`：`rice → dotOk/amountRice`、`!hasResult||!ok → dotFail/amountFail`、`low → dotWarn/amountLow`、其余 `dotOk/amount`。
+
+> **补齐 sizePct（Win 端整体缩放，两端终于一致）**
+> 之前 Win 端的 `McLayout.SizeScaleOf()` 硬编码返回 `1.0`，而老板配置里 `display.sizePct` 是 **70** —— 结果同一份配置 Mac 画 302px 宽、Win 画 431px 宽，**Win 比 Mac 大 43%**，肉眼可见。
+> 本轮把这条路彻底接通：`Panel.cs` 的 `DisplayConfig` 新增 `SizePct` 字段（默认 100），配置解析用 `Json.GetNumber(disp,"sizePct")` + `ClampDouble(v,40,200)` + `Math.Round` 取整（与 Mac `shared/config-core.js` 的 `clampNum(...,40,200)` + `int()` 逐条对齐）；`Panel.V3.cs` 的 `SizeScaleOf()` 改为读 `cfg.Display.SizePct/100.0`，非法值兜底 1.0。
+> **实测四档全部线性**（Win 出图）：`100% → 308×114`、`70% → 216×80`、`40% → 123×46`、`200% → 616×230`，缩放精确到 0.1%。真机部署后日志确认窗口 `w=216 h=80`，与实际配置的 70% 吻合。
+> **同时补上设置页控件**：此前 `world/dist/webui.js` 里 `sizePct` **一个字符都没有**，老板只能手改 `config.json`。现新增「整体缩放（%）」输入框（40–200，步进 5，默认 100），与「面板 / 饭桶」下拉同排；保存时做 `Math.round` + clamp 40..200，非法值回 100。
+
+> **顺带修掉一个双端共有的对比度缺陷（低额金额）**：minicard 的「低额」金额原本用亮橙 `rgb(255,149,0)`，叠在浅色卡面（白底）上只有 **2.2:1**，远低于 WCAG AA 要求的 4.5:1——金额是文字，读不清就是缺陷（状态点是小色块、有背景衬托，保留亮橙以维持警示观感）。两端同步改为：**浅色主题金额用深橙 `rgb(166,88,0)`（5.01:1，实测出图 6.89:1）**，深色主题橙底本就够亮（9.39:1）保持原样。macOS 改 `src/style.js` 的 `buildMinicardStyle()`，Win 改 `McRenderer.RowColors()`。修复后实测：浅色正常 `20.13:1`、深色正常 `16.63:1`、浅色低额 `6.89:1`、深色低额 `9.39:1`、深色米饭 `13.93:1`，全部过 AA。
+
+
+- **`UnitFormat` 取整 + 显示单位**：`Panel.cs` 新增 `UnitFormat` 静态类（`CNY` / `USD` / `CREDITS`，大小写不敏感；缺省按 preset 推导——`qoder`→`CREDITS`、`openrouter`→`USD`、其余 `CNY`）。`UnitFormat.Money()` 取整，口径与 macOS 逐条对齐（四舍五入 / 负数远离零 / `-0` 归一为 0）；`Format()` 输出 `¥12` / `$12` / `C 2177`（0.0.7 定稿：积分符号改成前缀 `C ` + 空格，**与 macOS `CREDITS_SYMBOL` 逐字一致**，不再输出 `2177 Credits` 这种带英文单位的旧写法；`Symbol()` / `Suffix()` 承担这一口径），`ThresholdText()` 明细卡阈值保留 `5 Credits` 旧写法（属配置说明文本、不是余额金额）。`Panel.V3.cs` 的 `AmountText()` 改为转调 `UnitFormat.Format()`，明细卡阈值行同步改用 `UnitFormat.ThresholdText()`。缓存指纹同样按取整后的值算。
+- **minicard 支持（原生 GDI+ 实现）**：显示窗 `panel.exe` 是纯 Win32 + GDI+ 程序（不是 Electron），无法引用 `renderer/renderer.js`，故按 macOS 的几何与配色**逐项移植**为 C#：`Panel.V3.cs` 新增 `McLayout`（算几何，常量与 macOS `src/layout.js` 的 `computeMinicard()` 一一对应：`MC_RATIO=2.8`、`MC_ROW_H=30`、`MC_PAD_X/Y=16/10`、`MC_RADIUS=14`、`MC_NAME/AMOUNT_PX=13`、`MC_DOT=8`、`MC_MIN/MAX_W=168/460`）与 `McRenderer`（GDI+ 绘制，走既有 `RasterScale` 2× 超采样 + 预乘 alpha，与饭桶形态共用同一套抗锯齿管线）。`Panel.cs` 五处接线：`mini` 标志、`ComputePlacementLocked()` 优先分支、渲染派发优先分支、`ViewNamesForMini()` 辅助、配置解析白名单（`minicard` / `capsule` / 其余回退 `ricebowl`）。窗口尺寸与位图尺寸由**同一次** `McLayout.Compute()` 得出，`PaintLayered` 整幅 Blit 不会错位。**Win 0.0.7 只支持 `sizePct=100`**（`McLayout.SizeScaleOf()` 固定返回 1.0，留了接 `display.sizePct` 的注释位），整体缩放属后续版本。
+- **`config.example.json` 增补 Qoder 预设**：`preset: "qoder"`、`unit: "CREDITS"`、PAT 走 `%USERPROFILE%\.dsh\secrets\qoder-pat.txt`（变量 `QODER_PAT`），默认 `enabled: false`。
+
 ## 0.0.6（2026-11-12 发布）
 
 修复 macOS 显示窗「打游戏时桌宠说话 / 倾听气泡把饭桶放大」与「petprobe 挂死后面板消失」；仓库同步 Windows 端 2026-11-08 现网修复（字体 2× 超采样、断网韧性）。Windows 显示窗 / macOS 显示窗 / Coopanion 扩展同号 0.0.6（界面 / 市场显示 v0.06）。
