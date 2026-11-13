@@ -1,6 +1,6 @@
 # 更新日志
 
-## 0.0.7（2026-11-13 发布）
+## 0.0.8（2026-11-13 发布）
 
 金额一律去掉小数位；新增 `minicard`（面板）显示样式；恢复 / 新增 Qoder 供应商；积分单位符号 `₡` → `C `。Windows 显示窗 / macOS 显示窗同号 0.0.7。
 
@@ -11,14 +11,14 @@
 - **单位符号 `₡` → `C `**：Qoder 这类积分源原来显示 `₡2177`，其中 `U+20A1`（科朗符号）在中文字体（PingFang SC）里**缺字**，会掉到系统回退字体、字重明显不匹配；改为**字母 `C` + 空格**（`C 1528`）。积分源仍不是钱，不加 `¥` / `$`。
 - **版本号**：macOS `package.json` 0.0.7、打包脚本 `APP_VERSION=0.0.7`（合法 semver）；Windows `0.0.7`（与 Mac 同号）。兼容：新增字段（`display.style` 的 `minicard`、供应商 `unit`）全部可选，旧 `config.json` 原样可用。
 
-### macOS 显示窗（v0.0.7）
+### macOS 显示窗（v0.0.8）
 
 - **金额取整 + `C ` 单位**：`main.js` 新增 `moneyText()`，`amountText()` 改为 `¥82` / `$82` / `C 1528` 三口径；`detailSubText()` 的低额提醒阈值同口径（`低于 ¥5 变红` / `低于 5 Credits 变红`）；`renderer/renderer.js` 的 `CREDITS_SYMBOL` 由 `₡` 改为 `C `，木牌上不再写 "Credits" 字样。
 - **minicard 缩放修正（`sizePct` 等比）**：整体缩放 `sizePct` 早先只作用在卡片**宽度**的 clamp 边界上，行高 / 内边距 / 圆角 / 状态点 / 字号全部没跟着缩，导致 `sizePct<100` 时「卡缩小、内容不缩」，家名列被挤到下限、`DeepSeek` 显示成 `Dek…`。现将行高 `rowH`、上下左右内边距 `padX`/`padY`、圆角 `radius`、状态点 `dotD`/`dotGap`、中缝 `midGap`、字号 `namePx`/`amountPx`、金额列宽 `amountMaxW` 全部乘 `K = sizePct/100`，卡宽基础值同样乘 `K` 并以内容需求宽度 `needW` 作为上下限的地板，`namePx`/`amountPx` 保留 `max(8*K, …)` 下限。验证：`sizePct` 50/70/85/100/130/200 六档 × 1~9 家 × DPI 1/2 共 60 组几何回归全绿；离屏渲染深/浅双主题 × 70%/100% 出图核对，真机截图确认 `DeepSeek` / `「中转站」` / `Qoder` 三行完整无省略号。
 - **minicard 小面板**：见上「通用」。`src/layout.js` 新增 `isMinicard()` / `computeMinicard()`（小面板几何全由布局层算好，渲染层只读尺寸，不再自己算），`src/style.js` 新增 minicard 配色 token（**挂在独立子对象上，既有 30 个配色键一个都不动**），`renderer/renderer.js` 新增小面板绘制路径（`style !== 'minicard'` 时完全走原路径）。
 - **Qoder 供应商**：`src/providers.js`（薄壳 → `shared/providers-core.js`）支持 Qoder 积分查询（PAT 换 jt- 票据 + 进程内缓存 + 401 强制重换一次）；配置预设新增 `qoder`（默认关闭、`unit: CREDITS`）；密钥只读 `~/.dsh/secrets/qoder-pat.txt`（`QODER_PAT`），日志与界面均不带密钥。
 
-### Windows 显示窗（v0.0.7）
+### Windows 显示窗（v0.0.8）
 
 > **修复「面板 / 饭桶」切换后尺寸不对、饭桶完全不吃 sizePct（整体缩放）**
 > 现象：Mac 上「整体缩放 70%」饭桶和面板都乖乖缩小，Win 上切到「饭桶」立刻弹回原尺寸 —— 同一份 `config.json`，Win 比 Mac 大一圈。

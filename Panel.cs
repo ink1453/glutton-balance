@@ -18,13 +18,14 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 
-// ---- 0.0.7（第 27 轮）：Win 显示窗版本元数据同号 0.0.7，与 Mac / npm / 插件市场统一 ----
+// ---- 0.0.8：Win 显示窗版本元数据同号 0.0.8，与 Mac / npm / 插件市场统一 ----
 // 只写 exe 的 Win32 版本资源（属性→详细信息 可查），不改任何运行逻辑；
-// 编译后可在 Win 侧核对：(Get-Item .\panel.exe).VersionInfo.FileVersion → 0.0.7.0
-// 0.0.7 变化：新增 minicard 小面板形态（一行一家）；金额去小数；CREDITS 改「C 2177」口径。
-[assembly: System.Reflection.AssemblyVersion("0.0.7.0")]
-[assembly: System.Reflection.AssemblyFileVersion("0.0.7.0")]
-[assembly: System.Reflection.AssemblyInformationalVersion("0.0.7")]
+// 编译后可在 Win 侧核对：(Get-Item .\panel.exe).VersionInfo.FileVersion → 0.0.8.0
+// 0.0.7 阶段变化（保留记录）：新增 minicard 小面板形态（一行一家）；金额去小数；CREDITS 改「C 2177」口径。
+// 0.0.8 变化：修复饭桶形态不吃 sizePct（整体缩放）——GraphicsScale 补乘 K + 碗体硬下限同比缩放。
+[assembly: System.Reflection.AssemblyVersion("0.0.8.0")]
+[assembly: System.Reflection.AssemblyFileVersion("0.0.8.0")]
+[assembly: System.Reflection.AssemblyInformationalVersion("0.0.8")]
 
 namespace GluttonBalance
 {

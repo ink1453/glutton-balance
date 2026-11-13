@@ -19,7 +19,7 @@ const logger = require('./src/logger');
 
 const APP_ROOT = __dirname;
 const APP_NAME = '饭桶余额';
-const APP_VERSION = '0.0.7';
+const APP_VERSION = '0.0.8';
 const ASSETS_DIR = path.join(APP_ROOT, 'assets');
 const RENDERER_HTML = process.env.PBP_RENDERER || path.join(APP_ROOT, 'renderer', 'index.html');
 const PRELOAD = path.join(APP_ROOT, 'preload.js');
